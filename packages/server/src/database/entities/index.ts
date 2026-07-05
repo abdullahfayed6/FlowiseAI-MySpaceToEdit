@@ -27,6 +27,9 @@ import { WorkspaceUser } from '../../enterprise/database/entities/workspace-user
 import { LoginMethod } from '../../enterprise/database/entities/login-method.entity'
 import { LoginSession } from '../../enterprise/database/entities/login-session.entity'
 
+import { WhatsAppDevice } from './WhatsAppDevice'
+import { WhatsAppChatbot } from './WhatsAppChatbot'
+
 export const entities = {
     ChatFlow,
     ChatMessage,
@@ -57,5 +60,7 @@ export const entities = {
     Workspace,
     WorkspaceUser,
     LoginMethod,
-    LoginSession
+    LoginSession,
+    WhatsAppDevice,
+    WhatsAppChatbot
 }

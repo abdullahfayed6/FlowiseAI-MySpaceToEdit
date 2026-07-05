@@ -58,6 +58,11 @@ const Files = Loadable(lazy(() => import('@/views/files')))
 // logs routing
 const Logs = Loadable(lazy(() => import('@/views/serverlogs')))
 
+// whatsapp routing
+const WhatsAppDevices = Loadable(lazy(() => import('@/views/whatsapp-devices')))
+const WhatsAppChatbots = Loadable(lazy(() => import('@/views/whatsapp-chatbots')))
+const WhatsAppInbox = Loadable(lazy(() => import('@/views/whatsapp-inbox')))
+
 // executions routing
 const Executions = Loadable(lazy(() => import('@/views/agentexecutions')))
 
@@ -343,6 +348,18 @@ const MainRoutes = {
         {
             path: '/sso-success',
             element: <SSOSuccess />
+        },
+        {
+            path: '/whatsapp-devices',
+            element: <WhatsAppDevices />
+        },
+        {
+            path: '/whatsapp-chatbots',
+            element: <WhatsAppChatbots />
+        },
+        {
+            path: '/whatsapp-inbox',
+            element: <WhatsAppInbox />
         }
     ]
 }

@@ -34,6 +34,7 @@ import { SSEStreamer } from './utils/SSEStreamer'
 import { Telemetry } from './utils/telemetry'
 import { validateAPIKey } from './utils/validateKey'
 import { getAllowedIframeOrigins, getCorsOptions, sanitizeMiddleware } from './utils/XSS'
+import { WhatsAppSessionManager } from './utils/WhatsAppSessionManager'
 
 declare global {
     namespace Express {
@@ -87,6 +88,13 @@ export class App {
             // Run Migrations Scripts
             await this.AppDataSource.runMigrations({ transaction: 'each' })
             logger.info('🔄 [server]: Database migrations completed successfully')
+
+            // Auto-create WhatsApp tables if missing
+            await ensureWhatsAppTables(this.AppDataSource)
+
+            // Initialize WhatsApp Sessions
+            await WhatsAppSessionManager.getInstance().initializeAllSessions()
+            logger.info('📱 [server]: WhatsApp sessions initialized successfully')
 
             // Initialize Identity Manager
             this.identityManager = await IdentityManager.getInstance()
@@ -387,4 +395,55 @@ export async function start(): Promise<void> {
 
 export function getInstance(): App | undefined {
     return serverApp
+}
+
+async function ensureWhatsAppTables(dataSource: DataSource) {
+    const queryRunner = dataSource.createQueryRunner()
+    try {
+        const dbType = dataSource.options.type
+        const hasDeviceTable = await queryRunner.hasTable('whatsapp_device')
+        if (!hasDeviceTable) {
+            const idCol = dbType === 'postgres' ? 'UUID PRIMARY KEY' : 'VARCHAR(36) PRIMARY KEY'
+            const textCol = 'TEXT'
+            const dateCol = dbType === 'postgres' ? 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP' : 'DATETIME DEFAULT CURRENT_TIMESTAMP'
+
+            await queryRunner.query(`
+                CREATE TABLE whatsapp_device (
+                    id ${idCol},
+                    name VARCHAR(255) NOT NULL,
+                    sessionName VARCHAR(255) NOT NULL,
+                    phoneNumber VARCHAR(255),
+                    status VARCHAR(50) DEFAULT 'DISCONNECTED',
+                    qrCode ${textCol},
+                    createdDate ${dateCol},
+                    updatedDate ${dateCol}
+                );
+            `)
+            logger.info('Created whatsapp_device table')
+        }
+
+        const hasChatbotTable = await queryRunner.hasTable('whatsapp_chatbot')
+        if (!hasChatbotTable) {
+            const idCol = dbType === 'postgres' ? 'UUID PRIMARY KEY' : 'VARCHAR(36) PRIMARY KEY'
+            const boolCol = dbType === 'postgres' ? 'BOOLEAN DEFAULT TRUE' : 'BOOLEAN DEFAULT 1'
+            const dateCol = dbType === 'postgres' ? 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP' : 'DATETIME DEFAULT CURRENT_TIMESTAMP'
+
+            await queryRunner.query(`
+                CREATE TABLE whatsapp_chatbot (
+                    id ${idCol},
+                    title VARCHAR(255) NOT NULL,
+                    deviceId VARCHAR(36) NOT NULL,
+                    chatflowId VARCHAR(36) NOT NULL,
+                    isActive ${boolCol},
+                    createdDate ${dateCol},
+                    updatedDate ${dateCol}
+                );
+            `)
+            logger.info('Created whatsapp_chatbot table')
+        }
+    } catch (e: any) {
+        logger.error('Error ensuring WhatsApp database tables:', e.message)
+    } finally {
+        await queryRunner.release()
+    }
 }

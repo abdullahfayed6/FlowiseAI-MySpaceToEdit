@@ -23,11 +23,17 @@ import {
     IconLockCheck,
     IconFileDatabase,
     IconShieldLock,
-    IconListCheck
+    IconListCheck,
+    IconDeviceMobile,
+    IconMessage2Code,
+    IconMessageCircle,
+    IconBrandWhatsapp
 } from '@tabler/icons-react'
 
 // constant
 const icons = {
+    IconMessageCircle,
+    IconBrandWhatsapp,
     IconHierarchy,
     IconUsersGroup,
     IconBuildingStore,
@@ -51,7 +57,9 @@ const icons = {
     IconLockCheck,
     IconFileDatabase,
     IconShieldLock,
-    IconListCheck
+    IconListCheck,
+    IconDeviceMobile,
+    IconMessage2Code
 }
 
 // ==============================|| DASHBOARD MENU ITEMS ||============================== //
@@ -155,6 +163,37 @@ const dashboard = {
                     icon: icons.IconFiles,
                     breadcrumbs: true,
                     permission: 'documentStores:view'
+                }
+            ]
+        },
+        {
+            id: 'whatsapp-group',
+            title: 'WhatsApp',
+            type: 'group',
+            children: [
+                {
+                    id: 'whatsapp-devices',
+                    title: 'WhatsApp Devices',
+                    type: 'item',
+                    url: '/whatsapp-devices',
+                    icon: icons.IconDeviceMobile,
+                    breadcrumbs: true
+                },
+                {
+                    id: 'whatsapp-chatbots',
+                    title: 'WA Chatbot',
+                    type: 'item',
+                    url: '/whatsapp-chatbots',
+                    icon: icons.IconMessage2Code,
+                    breadcrumbs: true
+                },
+                {
+                    id: 'whatsapp-inbox',
+                    title: 'WhatsApp Inbox',
+                    type: 'item',
+                    url: '/whatsapp-inbox',
+                    icon: icons.IconBrandWhatsapp,
+                    breadcrumbs: true
                 }
             ]
         },
