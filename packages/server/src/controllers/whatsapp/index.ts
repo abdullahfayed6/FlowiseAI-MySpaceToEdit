@@ -8,10 +8,6 @@ import { WhatsAppDevice } from '../../database/entities/WhatsAppDevice'
 import { WhatsAppChatbot } from '../../database/entities/WhatsAppChatbot'
 import logger from '../../utils/logger'
 import { WhatsAppSessionManager } from '../../utils/WhatsAppSessionManager'
-import { generateWAMessage } from '@whiskeysockets/baileys'
-import pino from 'pino'
-
-const pinoLogger = pino({ level: 'silent' })
 
 const getDevices = async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -201,25 +197,11 @@ const getChats = async (req: Request, res: Response, next: NextFunction) => {
 
         const deviceNumber = client.authState.creds.me?.id ? client.authState.creds.me.id.split(':')[0].split('@')[0] : ''
 
-        const chats = store.chats.all()
-        const formattedChats = chats
-            .filter((chat: any) => {
-                const jid = chat.id
-                if (jid === 'status@broadcast') return false
-                if (jid.endsWith('@g.us')) return false
-
-                // Filter out self-chats/system chats
-                const chatNumber = jid.split('@')[0]
-                if (chatNumber === deviceNumber) return false
-
-                return true
-            })
-            .map((chat: any) => ({
-                id: chat.id,
-                name: chat.name || chat.id.split('@')[0],
-                unreadCount: chat.unreadCount || 0,
-                timestamp: chat.conversationTimestamp || 0
-            }))
+        // Filter out the device's own chat; store already excludes groups/status/newsletters.
+        const formattedChats = store.listChats().filter((chat) => {
+            const num = (chat.pnJid || chat.id).split('@')[0]
+            return num !== deviceNumber && chat.id.split('@')[0] !== deviceNumber
+        })
         return res.status(200).json(formattedChats)
     } catch (error) {
         next(error)
@@ -234,32 +216,7 @@ const getMessages = async (req: Request, res: Response, next: NextFunction) => {
             return res.status(404).json({ error: 'WhatsApp store not found' })
         }
 
-        // Map chatId (Phone JID) to targetChatId (LID JID) from the store if it exists
-        let targetChatId = chatId
-        if (chatId.endsWith('@s.whatsapp.net')) {
-            const chats = store.chats.all()
-            const foundChat = chats.find((c: any) => c.pnJid === chatId)
-            if (foundChat && foundChat.id) {
-                targetChatId = foundChat.id
-            }
-        }
-
-        logger.info(`[WhatsApp] getMessages: requesting for chatId: "${chatId}", mapped to targetChatId: "${targetChatId}"`)
-        logger.info(`[WhatsApp] getMessages: available store.messages keys: ${JSON.stringify(Object.keys(store.messages))}`)
-
-        const messages = store.messages[targetChatId] ? store.messages[targetChatId].all() : []
-        logger.info(`[WhatsApp] getMessages: found ${messages.length} messages in store for "${targetChatId}"`)
-
-        const formattedMessages = messages.map((msg: any) => {
-            const body = msg.message?.conversation || msg.message?.extendedTextMessage?.text || ''
-            return {
-                id: msg.key.id,
-                body,
-                fromMe: msg.key.fromMe || false,
-                timestamp: msg.messageTimestamp
-            }
-        })
-        return res.status(200).json(formattedMessages)
+        return res.status(200).json(store.listMessages(chatId))
     } catch (error) {
         next(error)
     }
@@ -270,100 +227,23 @@ const sendMessage = async (req: Request, res: Response, next: NextFunction) => {
         const { deviceId, chatId } = req.params
         const { text } = req.body
         const client = WhatsAppSessionManager.getInstance().getClient(deviceId)
-        const store = WhatsAppSessionManager.getInstance().getStore(deviceId)
         if (!client) {
             return res.status(404).json({ error: 'WhatsApp client not connected or not found' })
         }
 
-        let targetJid = chatId
-        let phoneJid = chatId.endsWith('@s.whatsapp.net') ? chatId : null
-        let lidJid = chatId.endsWith('@lid') ? chatId : null
-        let tokenBuffer: Buffer | null = null
-
-        if (store) {
-            // Find chat by phone JID or LID JID
-            const chats = store.chats.all()
-            const chat = chats.find((c: any) => c.id === chatId || (c.pnJid && c.pnJid === chatId))
-
-            if (chat) {
-                if (chat.pnJid) {
-                    phoneJid = chat.pnJid
-                    targetJid = chat.pnJid
-                }
-                if (chat.id.endsWith('@lid')) {
-                    lidJid = chat.id
-                }
-
-                // Extract tcToken
-                if (chat.tcToken) {
-                    try {
-                        const rawToken = chat.tcToken as any
-                        if (Buffer.isBuffer(rawToken)) {
-                            tokenBuffer = rawToken
-                        } else if (rawToken && rawToken.type === 'Buffer' && Array.isArray(rawToken.data)) {
-                            tokenBuffer = Buffer.from(rawToken.data)
-                        } else {
-                            tokenBuffer = Buffer.from(rawToken)
-                        }
-
-                        if (lidJid) {
-                            logger.info(`[WhatsApp] Subscribing to presence for LID JID ${lidJid} with tcToken...`)
-                            await client.presenceSubscribe(lidJid, tokenBuffer)
-                        }
-                        if (phoneJid) {
-                            logger.info(`[WhatsApp] Subscribing to presence for Phone JID ${phoneJid} with tcToken...`)
-                            await client.presenceSubscribe(phoneJid, tokenBuffer)
-                        }
-
-                        logger.info(`[WhatsApp] Subscribed to presence. Waiting 2.5s for server propagation...`)
-                        await new Promise((resolve) => setTimeout(resolve, 2500))
-                    } catch (e: any) {
-                        logger.warn(`[WhatsApp] Failed to subscribe presence: ${e.message}`)
-                    }
-                }
-            }
-        }
-
-        const additionalNodes: any[] = []
-        if (tokenBuffer) {
-            additionalNodes.push({
-                tag: 'tctoken',
-                attrs: {},
-                content: tokenBuffer
-            })
-            logger.info(`[WhatsApp] Attaching tctoken directly to the message stanza for ${targetJid}`)
-        }
-
-        const storeJid = lidJid || chatId
-        const userJid = client.authState.creds.me?.id || (client.user ? client.user.id : '')
-        const fullMsg = await generateWAMessage(storeJid, { text }, {
-            logger: pinoLogger,
-            userJid,
-            upload: client.waUploadToServer
-        } as any)
-
-        await client.relayMessage(targetJid, fullMsg.message!, {
-            messageId: fullMsg.key.id || undefined,
-            additionalNodes
-        })
-
-        client.ev.emit('messages.upsert', {
-            messages: [fullMsg],
-            type: 'append'
-        })
-
-        logger.info(`[WhatsApp] Message sent successfully via relayMessage to: ${targetJid}`)
-
-        if (!fullMsg) {
+        // Baileys 7.x handles LID addressing + tctoken natively, so reply on the stored JID directly.
+        const sent = await client.sendMessage(chatId, { text })
+        if (!sent) {
             throw new Error('Failed to send message')
         }
 
-        const response = fullMsg
+        logger.info(`[WhatsApp] Message sent to: ${chatId} (id: ${sent.key.id}, status: ${sent.status})`)
+
         return res.status(200).json({
-            id: response.key.id,
-            body: response.message?.conversation || text,
-            fromMe: response.key.fromMe || false,
-            timestamp: response.messageTimestamp
+            id: sent.key.id,
+            body: text,
+            fromMe: true,
+            timestamp: sent.messageTimestamp
         })
     } catch (error) {
         next(error)
@@ -374,10 +254,16 @@ const deleteChat = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const { deviceId, chatId } = req.params
         const client = WhatsAppSessionManager.getInstance().getClient(deviceId)
+        const store = WhatsAppSessionManager.getInstance().getStore(deviceId)
         if (!client) {
             return res.status(404).json({ error: 'WhatsApp client not connected or not found' })
         }
-        await client.chatModify({ delete: true, lastMessages: [] }, chatId)
+        try {
+            await client.chatModify({ delete: true, lastMessages: [] }, chatId)
+        } catch (e: any) {
+            logger.warn(`[WhatsApp] chatModify delete failed for ${chatId}: ${e.message}`)
+        }
+        store?.deleteChat(chatId)
         return res.status(200).json({ message: 'Chat deleted successfully' })
     } catch (error) {
         next(error)

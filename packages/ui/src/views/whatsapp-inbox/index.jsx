@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import {
     Box,
     Card,
@@ -15,8 +15,7 @@ import {
     Select,
     Stack,
     TextField,
-    Typography,
-    Avatar
+    Typography
 } from '@mui/material'
 import { useTheme } from '@mui/material/styles'
 import { IconSend, IconMessageCircle, IconRefresh, IconTrash } from '@tabler/icons-react'
@@ -218,7 +217,7 @@ const WhatsAppInbox = () => {
                                     >
                                         <ListItemText
                                             primary={chat.name}
-                                            secondary={moment.unix(chat.timestamp).fromNow()}
+                                            secondary={chat.timestamp ? moment.unix(chat.timestamp).fromNow() : ''}
                                             primaryTypographyProps={{ fontWeight: chat.unreadCount > 0 ? 'bold' : 'normal' }}
                                         />
                                         {chat.unreadCount > 0 && (
@@ -283,7 +282,7 @@ const WhatsAppInbox = () => {
                                                         variant='caption'
                                                         sx={{ display: 'block', textAlign: 'right', mt: 0.5, color: 'text.secondary' }}
                                                     >
-                                                        {moment.unix(msg.timestamp).format('HH:mm')}
+                                                        {msg.timestamp ? moment.unix(msg.timestamp).format('HH:mm') : ''}
                                                     </Typography>
                                                 </Paper>
                                             </Box>

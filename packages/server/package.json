@@ -87,7 +87,7 @@
         "@types/passport": "^1.0.16",
         "@types/passport-jwt": "^4.0.1",
         "@types/passport-local": "^1.0.38",
-        "@whiskeysockets/baileys": "6.17.16",
+        "@whiskeysockets/baileys": "7.0.0-rc13",
         "async-mutex": "^0.4.0",
         "axios": "1.12.0",
         "bcryptjs": "^2.4.3",
