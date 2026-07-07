@@ -67,6 +67,11 @@ export class SimpleStore {
         }
     }
 
+    /** Public entry for recording a LID<->PN mapping resolved outside the event stream. */
+    public recordLidMapping(lid: string, pn: string) {
+        this.recordMapping(lid, pn)
+    }
+
     private upsertChat(id: string, patch: Partial<ChatRecord> = {}) {
         if (!id || id === 'status@broadcast' || id.endsWith('@g.us') || id.endsWith('@newsletter')) return
         const existing = this.chats.get(id)
@@ -92,16 +97,32 @@ export class SimpleStore {
         if (!jid || !id) return
         if (jid === 'status@broadcast' || jid.endsWith('@g.us') || jid.endsWith('@newsletter')) return
 
+        // Baileys 7.x exposes the phone JID alongside a LID via key.remoteJidAlt. Capture it so the
+        // inbox can display the real number instead of the opaque @lid id.
+        const alt = msg?.key?.remoteJidAlt
+        if (jid.endsWith('@lid') && alt?.endsWith('@s.whatsapp.net')) {
+            this.recordMapping(jid, alt)
+        } else if (jid.endsWith('@s.whatsapp.net') && alt?.endsWith('@lid')) {
+            this.recordMapping(alt, jid)
+        }
+
         let bucket = this.messages.get(jid)
         if (!bucket) {
             bucket = new Map()
             this.messages.set(jid, bucket)
         }
+        // Ensure a timestamp: outgoing replies are appended without messageTimestamp, which would
+        // sort them to the very top (epoch 0) with no time shown. Fall back to "now".
+        let ts = coerceTimestamp(msg.messageTimestamp)
+        if (!ts) {
+            ts = Math.floor(Date.now() / 1000)
+            msg.messageTimestamp = ts
+        }
+
         // Merge so a later status/content update doesn't wipe the body
         const prev = bucket.get(id)
         bucket.set(id, prev ? { ...prev, ...msg, message: msg.message || prev.message } : msg)
 
-        const ts = coerceTimestamp(msg.messageTimestamp)
         this.upsertChat(jid, { conversationTimestamp: ts })
     }
 
@@ -199,22 +220,47 @@ export class SimpleStore {
         return keys.some((k) => (this.messages.get(k)?.size || 0) > 0)
     }
 
-    /** Private chats that actually have messages, most recent first. */
+    /**
+     * Private chats that actually have messages, deduped so a contact known under both its @lid and
+     * @s.whatsapp.net JIDs shows as a single row. Display label is always the phone number (not the
+     * saved contact name). The row's `id` prefers the phone JID so replies target it directly.
+     */
     listChats() {
-        return Array.from(this.chats.values())
-            .filter((c) => c.id.endsWith('@lid') || c.id.endsWith('@s.whatsapp.net'))
-            .filter((c) => this.hasMessages(c))
-            .map((c) => {
-                const pn = c.pnJid || this.lidToPn.get(c.id)
-                const number = (pn || c.id).split('@')[0]
-                return {
-                    id: c.id,
-                    name: c.name || number,
-                    pnJid: pn,
+        const groups = new Map<string, { id: string; number: string; unreadCount: number; timestamp: number }>()
+
+        for (const c of this.chats.values()) {
+            if (!(c.id.endsWith('@lid') || c.id.endsWith('@s.whatsapp.net'))) continue
+            if (!this.hasMessages(c)) continue
+
+            const pn = c.pnJid || this.lidToPn.get(c.id)
+            // Group key = phone number when known, else the raw id (LID with no known PN).
+            const number = (pn || c.id).split('@')[0]
+            const groupKey = pn ? pn : c.id
+            const preferredId = pn || c.id
+
+            const existing = groups.get(groupKey)
+            if (existing) {
+                existing.unreadCount += c.unreadCount || 0
+                existing.timestamp = Math.max(existing.timestamp, c.conversationTimestamp || 0)
+                // Prefer a phone JID as the row id if we now have one
+                if (preferredId.endsWith('@s.whatsapp.net')) existing.id = preferredId
+            } else {
+                groups.set(groupKey, {
+                    id: preferredId,
+                    number,
                     unreadCount: c.unreadCount || 0,
                     timestamp: c.conversationTimestamp || 0
-                }
-            })
+                })
+            }
+        }
+
+        return Array.from(groups.values())
+            .map((g) => ({
+                id: g.id,
+                name: g.number, // always show the number, never the contact name
+                unreadCount: g.unreadCount,
+                timestamp: g.timestamp
+            }))
             .sort((a, b) => b.timestamp - a.timestamp)
     }
 
@@ -504,6 +550,19 @@ export class WhatsAppSessionManager {
 
                 const senderId = remoteJid.split('@')[0]
                 logger.info(`[WhatsApp Device ${device.name}] Message from ${remoteJid}: ${body}`)
+
+                // Resolve the real phone number for a @lid sender via Baileys' native LID mapping,
+                // so the inbox shows the number rather than the opaque hidden id. Best-effort.
+                if (remoteJid.endsWith('@lid') && !store.lidToPn.has(remoteJid)) {
+                    try {
+                        const pn = await (sock as any).signalRepository?.lidMapping?.getPNForLID?.(remoteJid)
+                        if (pn && typeof pn === 'string' && pn.endsWith('@s.whatsapp.net')) {
+                            store.recordLidMapping(remoteJid, pn)
+                        }
+                    } catch (e: any) {
+                        logger.warn(`[WhatsApp] getPNForLID failed for ${remoteJid}: ${e.message}`)
+                    }
+                }
 
                 try {
                     const activeChatbot = await chatbotRepo.findOneBy({ deviceId: device.id, isActive: true })

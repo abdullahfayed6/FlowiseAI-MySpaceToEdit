@@ -198,9 +198,9 @@ const getChats = async (req: Request, res: Response, next: NextFunction) => {
         const deviceNumber = client.authState.creds.me?.id ? client.authState.creds.me.id.split(':')[0].split('@')[0] : ''
 
         // Filter out the device's own chat; store already excludes groups/status/newsletters.
+        // listChats() sets `name` to the phone number and `id` to the preferred JID.
         const formattedChats = store.listChats().filter((chat) => {
-            const num = (chat.pnJid || chat.id).split('@')[0]
-            return num !== deviceNumber && chat.id.split('@')[0] !== deviceNumber
+            return chat.name !== deviceNumber && chat.id.split('@')[0] !== deviceNumber
         })
         return res.status(200).json(formattedChats)
     } catch (error) {
