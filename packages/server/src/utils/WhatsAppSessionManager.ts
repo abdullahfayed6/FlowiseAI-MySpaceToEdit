@@ -37,6 +37,7 @@ interface ChatRecord {
     pnJid?: string
     conversationTimestamp: number
     unreadCount: number
+    isPaused?: boolean
 }
 
 /**
@@ -64,12 +65,56 @@ export class SimpleStore {
             this.pnToLid.set(pn, lid)
             const chat = this.chats.get(lid)
             if (chat) chat.pnJid = pn
+
+            // Sync isPaused flag between LID and PN
+            const lidChat = this.chats.get(lid)
+            const pnChat = this.chats.get(pn)
+            if (lidChat && pnChat) {
+                const isPaused = lidChat.isPaused || pnChat.isPaused || false
+                lidChat.isPaused = isPaused
+                pnChat.isPaused = isPaused
+            } else if (lidChat && !pnChat) {
+                if (lidChat.isPaused) {
+                    this.upsertChat(pn, { isPaused: true })
+                }
+            } else if (!lidChat && pnChat) {
+                if (pnChat.isPaused) {
+                    this.upsertChat(lid, { isPaused: true })
+                }
+            }
         }
     }
 
     /** Public entry for recording a LID<->PN mapping resolved outside the event stream. */
     public recordLidMapping(lid: string, pn: string) {
         this.recordMapping(lid, pn)
+    }
+
+    public pauseChat(chatId: string, isPaused: boolean) {
+        const update = (id: string) => {
+            const existing = this.chats.get(id)
+            if (existing) {
+                existing.isPaused = isPaused
+            } else {
+                this.chats.set(id, {
+                    id: id,
+                    conversationTimestamp: Math.floor(Date.now() / 1000),
+                    unreadCount: 0,
+                    isPaused: isPaused
+                })
+            }
+        }
+
+        update(chatId)
+
+        // If there's an alias mapping, update it too
+        const pn = chatId.endsWith('@s.whatsapp.net') ? chatId : this.lidToPn.get(chatId)
+        const lid = chatId.endsWith('@lid') ? chatId : this.pnToLid.get(chatId)
+
+        if (pn) update(pn)
+        if (lid) update(lid)
+
+        this.save()
     }
 
     private upsertChat(id: string, patch: Partial<ChatRecord> = {}) {
@@ -86,7 +131,8 @@ export class SimpleStore {
                 name: patch.name,
                 pnJid: patch.pnJid,
                 conversationTimestamp: patch.conversationTimestamp || 0,
-                unreadCount: patch.unreadCount || 0
+                unreadCount: patch.unreadCount || 0,
+                isPaused: patch.isPaused || false
             })
         }
     }
@@ -255,12 +301,22 @@ export class SimpleStore {
         }
 
         return Array.from(groups.values())
-            .map((g) => ({
-                id: g.id,
-                name: g.number, // always show the number, never the contact name
-                unreadCount: g.unreadCount,
-                timestamp: g.timestamp
-            }))
+            .map((g) => {
+                const pn = g.id.endsWith('@s.whatsapp.net') ? g.id : this.lidToPn.get(g.id) || undefined
+                const lid = g.id.endsWith('@lid') ? g.id : this.pnToLid.get(g.id) || undefined
+                const isPaused =
+                    (lid && this.chats.get(lid)?.isPaused) ||
+                    (pn && this.chats.get(pn)?.isPaused) ||
+                    this.chats.get(g.id)?.isPaused ||
+                    false
+                return {
+                    id: g.id,
+                    name: g.number, // always show the number, never the contact name
+                    unreadCount: g.unreadCount,
+                    timestamp: g.timestamp,
+                    isPaused: isPaused
+                }
+            })
             .sort((a, b) => b.timestamp - a.timestamp)
     }
 
@@ -540,10 +596,28 @@ export class WhatsAppSessionManager {
         sock.ev.on('messages.upsert', async (m) => {
             if (m.type !== 'notify') return
             for (const msg of m.messages) {
-                if (msg.key.fromMe) continue
                 const remoteJid = msg.key.remoteJid
                 if (!remoteJid || remoteJid === 'status@broadcast') continue
                 if (remoteJid.endsWith('@g.us') || remoteJid.endsWith('@newsletter')) continue
+
+                if (msg.key.fromMe) {
+                    logger.info(`[WhatsApp] Outgoing message detected from connected phone/web to ${remoteJid}. Auto-pausing AI.`)
+                    store.pauseChat(remoteJid, true)
+                    continue
+                }
+
+                const lid = remoteJid.endsWith('@lid') ? remoteJid : store.pnToLid.get(remoteJid)
+                const pn = remoteJid.endsWith('@s.whatsapp.net') ? remoteJid : store.lidToPn.get(remoteJid)
+                const isPaused =
+                    (lid ? store.chats.get(lid)?.isPaused : false) ||
+                    (pn ? store.chats.get(pn)?.isPaused : false) ||
+                    store.chats.get(remoteJid)?.isPaused ||
+                    false
+
+                if (isPaused) {
+                    logger.info(`[WhatsApp Chatbot] Skipping auto-reply for ${remoteJid} because AI is paused for this chat.`)
+                    continue
+                }
 
                 const body = extractBody(msg)
                 if (body.trim() === '') continue

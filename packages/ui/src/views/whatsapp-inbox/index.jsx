@@ -15,7 +15,9 @@ import {
     Select,
     Stack,
     TextField,
-    Typography
+    Typography,
+    Switch,
+    FormControlLabel
 } from '@mui/material'
 import { useTheme } from '@mui/material/styles'
 import { IconSend, IconMessageCircle, IconRefresh, IconTrash } from '@tabler/icons-react'
@@ -139,12 +141,14 @@ const WhatsAppInbox = () => {
         try {
             const res = await whatsappApi.sendMessage(selectedDeviceId, selectedChat.id, text)
             if (res && res.data) {
-                // replace temp message or just fetch again
+                // Update local chat isPaused state to true (AI Off / Manual) since human replied
+                const updatedChat = { ...selectedChat, isPaused: true }
+                setSelectedChat(updatedChat)
+                setChats((prev) => prev.map((c) => (c.id === selectedChat.id ? updatedChat : c)))
                 fetchMessages(false)
             }
         } catch (error) {
             console.error('Error sending message', error)
-            // Revert optimistic update on failure could be handled here
         }
     }
 
@@ -217,7 +221,28 @@ const WhatsAppInbox = () => {
                                     >
                                         <ListItemText
                                             primary={chat.name}
-                                            secondary={chat.timestamp ? moment.unix(chat.timestamp).fromNow() : ''}
+                                            secondary={
+                                                <Stack direction='row' spacing={1} alignItems='center' sx={{ mt: 0.5 }}>
+                                                    <span>{chat.timestamp ? moment.unix(chat.timestamp).fromNow() : ''}</span>
+                                                    {chat.isPaused && (
+                                                        <Typography
+                                                            variant='caption'
+                                                            sx={{
+                                                                color: 'error.main',
+                                                                border: '1px solid',
+                                                                borderColor: 'error.main',
+                                                                borderRadius: '4px',
+                                                                px: 0.5,
+                                                                py: 0.1,
+                                                                fontWeight: 'bold',
+                                                                fontSize: '10px'
+                                                            }}
+                                                        >
+                                                            Manual
+                                                        </Typography>
+                                                    )}
+                                                </Stack>
+                                            }
                                             primaryTypographyProps={{ fontWeight: chat.unreadCount > 0 ? 'bold' : 'normal' }}
                                         />
                                         {chat.unreadCount > 0 && (
@@ -247,7 +272,42 @@ const WhatsAppInbox = () => {
                                         alignItems: 'center'
                                     }}
                                 >
-                                    <Typography variant='h6'>{selectedChat.name}</Typography>
+                                    <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                                        <Typography variant='h6' sx={{ mr: 2, fontWeight: 'bold' }}>
+                                            {selectedChat.name}
+                                        </Typography>
+                                        <FormControlLabel
+                                            control={
+                                                <Switch
+                                                    checked={!selectedChat.isPaused}
+                                                    size='small'
+                                                    onChange={async (e) => {
+                                                        const targetChecked = e.target.checked
+                                                        const isPausedVal = !targetChecked
+                                                        try {
+                                                            await whatsappApi.toggleChatAI(selectedDeviceId, selectedChat.id, isPausedVal)
+                                                            const updatedChat = { ...selectedChat, isPaused: isPausedVal }
+                                                            setSelectedChat(updatedChat)
+                                                            setChats((prev) =>
+                                                                prev.map((c) => (c.id === selectedChat.id ? updatedChat : c))
+                                                            )
+                                                        } catch (err) {
+                                                            console.error('Error toggling AI mode', err)
+                                                        }
+                                                    }}
+                                                    color='secondary'
+                                                />
+                                            }
+                                            label={selectedChat.isPaused ? 'AI Off (Manual)' : 'AI On (Auto-Pilot)'}
+                                            sx={{
+                                                '& .MuiFormControlLabel-label': {
+                                                    fontSize: '0.75rem',
+                                                    fontWeight: 'bold',
+                                                    color: selectedChat.isPaused ? 'error.main' : 'success.main'
+                                                }
+                                            }}
+                                        />
+                                    </Box>
                                     <IconButton size='small' color='error' onClick={() => handleDeleteChat(selectedChat.id)}>
                                         <IconTrash size={20} />
                                     </IconButton>

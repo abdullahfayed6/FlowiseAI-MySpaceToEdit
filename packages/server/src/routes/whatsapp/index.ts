@@ -19,6 +19,7 @@ router.delete('/chatbots/:id', whatsappController.deleteChatbot)
 router.get('/devices/:deviceId/chats', whatsappController.getChats)
 router.get('/devices/:deviceId/chats/:chatId/messages', whatsappController.getMessages)
 router.post('/devices/:deviceId/chats/:chatId/messages', whatsappController.sendMessage)
+router.post('/devices/:deviceId/chats/:chatId/toggle-ai', whatsappController.toggleChatAI)
 router.delete('/devices/:deviceId/chats/:chatId', whatsappController.deleteChat)
 
 export default router

@@ -239,12 +239,36 @@ const sendMessage = async (req: Request, res: Response, next: NextFunction) => {
 
         logger.info(`[WhatsApp] Message sent to: ${chatId} (id: ${sent.key.id}, status: ${sent.status})`)
 
+        // Auto-pause AI for this chat when a human agent replies
+        const store = WhatsAppSessionManager.getInstance().getStore(deviceId)
+        if (store) {
+            store.pauseChat(chatId, true)
+        }
+
         return res.status(200).json({
             id: sent.key.id,
             body: text,
             fromMe: true,
             timestamp: sent.messageTimestamp
         })
+    } catch (error) {
+        next(error)
+    }
+}
+
+const toggleChatAI = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const { deviceId, chatId } = req.params
+        const { isPaused } = req.body
+
+        const store = WhatsAppSessionManager.getInstance().getStore(deviceId)
+        if (!store) {
+            return res.status(404).json({ error: 'WhatsApp store not found' })
+        }
+
+        store.pauseChat(chatId, !!isPaused)
+
+        return res.status(200).json({ message: 'AI toggle updated successfully', isPaused: !!isPaused })
     } catch (error) {
         next(error)
     }
@@ -282,5 +306,6 @@ export default {
     getChats,
     getMessages,
     sendMessage,
+    toggleChatAI,
     deleteChat
 }
