@@ -16,6 +16,10 @@ const pinoLogger: any = pino({ level: process.env.WHATSAPP_DEBUG || 'silent' })
 
 const coerceTimestamp = (ts: any): number => {
     if (typeof ts === 'number') return ts
+    if (typeof ts === 'string') {
+        const parsed = parseInt(ts, 10)
+        return isNaN(parsed) ? 0 : parsed
+    }
     if (ts && typeof ts.toNumber === 'function') return ts.toNumber()
     if (ts && typeof ts.low === 'number') return ts.low
     return 0
@@ -40,6 +44,7 @@ interface ChatRecord {
     isPaused?: boolean
     lastFollowUpSentForMsgId?: string
     lastFollowUpTimestamp?: number
+    lastFollowUpTriggerId?: string
 }
 
 /**
@@ -798,6 +803,11 @@ export class WhatsAppSessionManager {
                 const lastMsg = messages[messages.length - 1]
                 if (!lastMsg.fromMe) continue
 
+                // Check if we already evaluated or sent a follow-up for this exact message JID state
+                if (chatRecord.lastFollowUpSentForMsgId === lastMsg.id || chatRecord.lastFollowUpTriggerId === lastMsg.id) {
+                    continue
+                }
+
                 // Check when the customer last spoke
                 let lastCustomerMsg = null
                 for (let i = messages.length - 1; i >= 0; i--) {
@@ -818,10 +828,6 @@ export class WhatsAppSessionManager {
                 const elapsedMinutes = elapsedSeconds / 60
 
                 if (elapsedMinutes >= delayMinutes) {
-                    if (chatRecord.lastFollowUpSentForMsgId === lastMsg.id) {
-                        continue
-                    }
-
                     logger.info(
                         `[WhatsApp Follow-Up] Evaluating chat ${chatId} for chatbot ${chatbot.title} (inactivity: ${Math.floor(
                             elapsedMinutes
@@ -834,12 +840,14 @@ export class WhatsAppSessionManager {
                             logger.info(`[WhatsApp Follow-Up] Decision YES for ${chatId}. Sending follow-up: "${result.message}"`)
                             const sent = await sock.sendMessage(chatId, { text: result.message })
                             if (sent) {
-                                chatRecord.lastFollowUpSentForMsgId = lastMsg.id
+                                chatRecord.lastFollowUpTriggerId = lastMsg.id
+                                chatRecord.lastFollowUpSentForMsgId = sent.key.id || undefined
                                 chatRecord.lastFollowUpTimestamp = Math.floor(Date.now() / 1000)
                                 store.save()
                             }
                         } else {
                             logger.info(`[WhatsApp Follow-Up] Decision NO for ${chatId}`)
+                            chatRecord.lastFollowUpTriggerId = lastMsg.id
                             chatRecord.lastFollowUpSentForMsgId = lastMsg.id
                             chatRecord.lastFollowUpTimestamp = Math.floor(Date.now() / 1000)
                             store.save()
