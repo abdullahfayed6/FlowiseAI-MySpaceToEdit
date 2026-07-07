@@ -38,6 +38,8 @@ interface ChatRecord {
     conversationTimestamp: number
     unreadCount: number
     isPaused?: boolean
+    lastFollowUpSentForMsgId?: string
+    lastFollowUpTimestamp?: number
 }
 
 /**
@@ -396,6 +398,7 @@ export class WhatsAppSessionManager {
     private stores: Map<string, SimpleStore> = new Map()
     private sessionNames: Map<string, string> = new Map()
     private initializing: Set<string> = new Set()
+    private followUpTimer: NodeJS.Timeout | null = null
 
     private constructor() {
         const cleanup = () => {
@@ -416,6 +419,9 @@ export class WhatsAppSessionManager {
             cleanup()
             process.exit(0)
         })
+
+        // Start background AI follow-up checker
+        this.startFollowUpChecker()
     }
 
     public static getInstance(): WhatsAppSessionManager {
@@ -425,8 +431,38 @@ export class WhatsAppSessionManager {
         return WhatsAppSessionManager.instance
     }
 
+    private async ensureDatabaseColumns() {
+        try {
+            const dataSource = getDataSource()
+            // Add isFollowUpEnabled
+            try {
+                await dataSource.query('ALTER TABLE whatsapp_chatbot ADD COLUMN isFollowUpEnabled BOOLEAN DEFAULT 0')
+                logger.info('[WhatsApp DB] Added column isFollowUpEnabled to whatsapp_chatbot table')
+            } catch (e) {
+                // ignore if column already exists
+            }
+            // Add followUpDelayMinutes
+            try {
+                await dataSource.query('ALTER TABLE whatsapp_chatbot ADD COLUMN followUpDelayMinutes INTEGER DEFAULT 1440')
+                logger.info('[WhatsApp DB] Added column followUpDelayMinutes to whatsapp_chatbot table')
+            } catch (e) {
+                // ignore if column already exists
+            }
+            // Add followUpSystemPrompt
+            try {
+                await dataSource.query('ALTER TABLE whatsapp_chatbot ADD COLUMN followUpSystemPrompt TEXT')
+                logger.info('[WhatsApp DB] Added column followUpSystemPrompt to whatsapp_chatbot table')
+            } catch (e) {
+                // ignore if column already exists
+            }
+        } catch (err: any) {
+            logger.error('[WhatsApp DB] Error executing column migrations:', err.message)
+        }
+    }
+
     public async initializeAllSessions(): Promise<void> {
         try {
+            await this.ensureDatabaseColumns()
             const dataSource = getDataSource()
             const deviceRepo = dataSource.getRepository(WhatsAppDevice)
             const devices = await deviceRepo.find()
@@ -726,6 +762,178 @@ export class WhatsAppSessionManager {
             if (fs.existsSync(storePath)) {
                 fs.rmSync(storePath, { force: true })
             }
+        }
+    }
+
+    private startFollowUpChecker() {
+        if (this.followUpTimer) return
+        this.followUpTimer = setInterval(() => {
+            this.runFollowUpCheck().catch((err) => {
+                logger.error('[WhatsApp Follow-Up] Error in background checker loop:', err)
+            })
+        }, 60000) // check every 60 seconds
+    }
+
+    private async runFollowUpCheck() {
+        const dataSource = getDataSource()
+        const chatbotRepo = dataSource.getRepository(WhatsAppChatbot)
+        const activeChatbots = await chatbotRepo.findBy({ isActive: true })
+
+        for (const chatbot of activeChatbots) {
+            if (!chatbot.isFollowUpEnabled) continue
+
+            const store = this.getStore(chatbot.deviceId)
+            const sock = this.getClient(chatbot.deviceId)
+            if (!store || !sock) continue
+
+            const delayMinutes = chatbot.followUpDelayMinutes || 1440
+            const systemPrompt = chatbot.followUpSystemPrompt || ''
+
+            for (const [chatId, chatRecord] of store.chats.entries()) {
+                if (chatRecord.isPaused) continue
+
+                const messages = store.listMessages(chatId)
+                if (messages.length === 0) continue
+
+                const lastMsg = messages[messages.length - 1]
+                if (!lastMsg.fromMe) continue
+
+                // Check when the customer last spoke
+                let lastCustomerMsg = null
+                for (let i = messages.length - 1; i >= 0; i--) {
+                    if (!messages[i].fromMe) {
+                        lastCustomerMsg = messages[i]
+                        break
+                    }
+                }
+                const T_customer = lastCustomerMsg ? lastCustomerMsg.timestamp : 0
+                const lastFollowUpTimestamp = chatRecord.lastFollowUpTimestamp || 0
+
+                if (lastFollowUpTimestamp > T_customer) {
+                    // We already followed up since the customer last spoke. Skip to avoid duplicate spam!
+                    continue
+                }
+
+                const elapsedSeconds = Math.floor(Date.now() / 1000) - lastMsg.timestamp
+                const elapsedMinutes = elapsedSeconds / 60
+
+                if (elapsedMinutes >= delayMinutes) {
+                    if (chatRecord.lastFollowUpSentForMsgId === lastMsg.id) {
+                        continue
+                    }
+
+                    logger.info(
+                        `[WhatsApp Follow-Up] Evaluating chat ${chatId} for chatbot ${chatbot.title} (inactivity: ${Math.floor(
+                            elapsedMinutes
+                        )} mins)`
+                    )
+
+                    try {
+                        const result = await this.evaluateFollowUp(chatbot, messages, systemPrompt, chatId)
+                        if (result && result.decision === 'YES') {
+                            logger.info(`[WhatsApp Follow-Up] Decision YES for ${chatId}. Sending follow-up: "${result.message}"`)
+                            const sent = await sock.sendMessage(chatId, { text: result.message })
+                            if (sent) {
+                                chatRecord.lastFollowUpSentForMsgId = lastMsg.id
+                                chatRecord.lastFollowUpTimestamp = Math.floor(Date.now() / 1000)
+                                store.save()
+                            }
+                        } else {
+                            logger.info(`[WhatsApp Follow-Up] Decision NO for ${chatId}`)
+                            chatRecord.lastFollowUpSentForMsgId = lastMsg.id
+                            chatRecord.lastFollowUpTimestamp = Math.floor(Date.now() / 1000)
+                            store.save()
+                        }
+                    } catch (err: any) {
+                        logger.error(`[WhatsApp Follow-Up] Evaluation failed for chat ${chatId}:`, err.message)
+                    }
+                }
+            }
+        }
+    }
+
+    private async evaluateFollowUp(chatbot: WhatsAppChatbot, messages: any[], systemPrompt: string, chatId: string) {
+        const historyText = messages
+            .slice(-10)
+            .map((msg) => `${msg.fromMe ? 'البوت' : 'العميل'}: ${msg.body}`)
+            .join('\n')
+
+        const defaultPrompt = `Based on the following chat history between the customer and our chatbot, decide whether we should send a friendly follow-up message.
+
+Chat History:
+{chat_history}
+
+Decision Rules:
+1. If the conversation ended with a clear agreement, explicit refusal, booking confirmation, or if it doesn't require any response, output 'Decision: NO'.
+2. If the customer showed interest but hasn't replied to our last question/message for a while, output 'Decision: YES'.
+
+If the decision is YES, write a friendly and appropriate follow-up message in the same language and tone as the conversation context.
+If the decision is NO, leave the message empty.
+
+Examples:
+
+Example 1 (Customer showed interest but hasn't replied to our booking question):
+Chat History:
+البوت: أهلاً بك! لدينا شقة 3 غرف بسعر 5000 ريال شهرياً. هل تود حجز موعد للمعاينة؟
+القرار: نعم
+الرسالة: أهلاً بك يا غالي، هل ما زلت مهتماً بمعاينة الشقة في حي النرجس؟
+
+Example 2 (Customer explicitly refused/declined):
+Chat History:
+العميل: شكراً لك، لا أرغب في الاستمرار.
+البوت: على الرحب والسعة! في خدمتك دائماً.
+القرار: لا
+الرسالة: 
+
+Required Response Format (strict):
+Decision: [YES / NO]
+Message: [The follow-up message text, or empty]`
+
+        const promptTemplate = systemPrompt || defaultPrompt
+        const question = promptTemplate.replace('{chat_history}', historyText)
+
+        const mockReq = {
+            params: { id: chatbot.chatflowId },
+            protocol: process.env.FLOWISE_URL && process.env.FLOWISE_URL.startsWith('https') ? 'https' : 'http',
+            get: (headerName: string) => {
+                if (headerName === 'host') {
+                    let host = `localhost:${process.env.PORT || 3000}`
+                    if (process.env.FLOWISE_URL) {
+                        try {
+                            host = new URL(process.env.FLOWISE_URL).host
+                        } catch (e) {
+                            // ignore
+                        }
+                    }
+                    return host
+                }
+                return undefined
+            },
+            body: {
+                question: question,
+                chatId: `followup_eval_${chatId.split('@')[0]}`,
+                streaming: false
+            },
+            files: [],
+            headers: {}
+        } as unknown as Request
+
+        const result = await utilBuildChatflow(mockReq, true)
+        const responseText = result.text || result.output || (typeof result === 'string' ? result : JSON.stringify(result))
+
+        logger.debug(`[WhatsApp Follow-Up] Raw LLM evaluation response: ${responseText}`)
+
+        const decisionMatch = responseText.match(/(?:القرار|Decision):\s*(نعم|لا|Yes|No)/i)
+        const decision = decisionMatch ? decisionMatch[1].trim() : 'لا'
+
+        const messageMatch = responseText.match(/(?:الرسالة|Message):\s*(.*)/is)
+        const followUpMessage = messageMatch ? messageMatch[1].trim() : ''
+
+        const isYes = decision === 'نعم' || decision.toLowerCase() === 'yes'
+
+        return {
+            decision: isYes ? 'YES' : 'NO',
+            message: followUpMessage
         }
     }
 }

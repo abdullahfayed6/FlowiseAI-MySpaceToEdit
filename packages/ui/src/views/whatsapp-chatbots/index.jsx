@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
     Box,
     Button,
@@ -21,7 +21,9 @@ import {
     TableHead,
     TableRow,
     TextField,
-    Typography
+    Typography,
+    FormControlLabel,
+    Divider
 } from '@mui/material'
 import { useTheme } from '@mui/material/styles'
 import { IconPlus, IconTrash, IconRobot, IconEye } from '@tabler/icons-react'
@@ -30,7 +32,6 @@ import { IconPlus, IconTrash, IconRobot, IconEye } from '@tabler/icons-react'
 import ViewHeader from '@/layout/MainLayout/ViewHeader'
 import whatsappApi from '@/api/whatsapp'
 import chatflowsApi from '@/api/chatflows'
-import useApi from '@/hooks/useApi'
 
 const WhatsAppChatbots = () => {
     const theme = useTheme()
@@ -40,9 +41,16 @@ const WhatsAppChatbots = () => {
     const [chatflows, setChatflows] = useState([])
 
     const [openAddDialog, setOpenAddDialog] = useState(false)
+    const [isEditMode, setIsEditMode] = useState(false)
+    const [editingChatbotId, setEditingChatbotId] = useState('')
     const [newChatbotTitle, setNewChatbotTitle] = useState('')
     const [selectedDeviceId, setSelectedDeviceId] = useState('')
     const [selectedChatflowId, setSelectedChatflowId] = useState('')
+
+    // Follow-up settings
+    const [isFollowUpEnabled, setIsFollowUpEnabled] = useState(false)
+    const [followUpDelayMinutes, setFollowUpDelayMinutes] = useState(1440)
+    const [followUpSystemPrompt, setFollowUpSystemPrompt] = useState('')
 
     const fetchAllData = async () => {
         try {
@@ -64,9 +72,26 @@ const WhatsAppChatbots = () => {
     }, [])
 
     const handleOpenAddDialog = () => {
+        setIsEditMode(false)
+        setEditingChatbotId('')
         setNewChatbotTitle('')
         setSelectedDeviceId('')
         setSelectedChatflowId('')
+        setIsFollowUpEnabled(false)
+        setFollowUpDelayMinutes(1440)
+        setFollowUpSystemPrompt('')
+        setOpenAddDialog(true)
+    }
+
+    const handleOpenEditDialog = (bot) => {
+        setIsEditMode(true)
+        setEditingChatbotId(bot.id)
+        setNewChatbotTitle(bot.title)
+        setSelectedDeviceId(bot.deviceId)
+        setSelectedChatflowId(bot.chatflowId)
+        setIsFollowUpEnabled(bot.isFollowUpEnabled || false)
+        setFollowUpDelayMinutes(bot.followUpDelayMinutes !== undefined ? bot.followUpDelayMinutes : 1440)
+        setFollowUpSystemPrompt(bot.followUpSystemPrompt || '')
         setOpenAddDialog(true)
     }
 
@@ -74,18 +99,27 @@ const WhatsAppChatbots = () => {
         setOpenAddDialog(false)
     }
 
-    const handleCreateChatbot = async () => {
+    const handleSaveChatbot = async () => {
         if (!newChatbotTitle || !selectedDeviceId || !selectedChatflowId) return
         try {
-            await whatsappApi.addChatbot({
+            const payload = {
                 title: newChatbotTitle,
                 deviceId: selectedDeviceId,
-                chatflowId: selectedChatflowId
-            })
+                chatflowId: selectedChatflowId,
+                isFollowUpEnabled,
+                followUpDelayMinutes: Number(followUpDelayMinutes),
+                followUpSystemPrompt
+            }
+
+            if (isEditMode) {
+                await whatsappApi.updateChatbot(editingChatbotId, payload)
+            } else {
+                await whatsappApi.addChatbot(payload)
+            }
             setOpenAddDialog(false)
             fetchAllData()
         } catch (error) {
-            console.error('Error creating WhatsApp chatbot mapping:', error)
+            console.error('Error saving WhatsApp chatbot mapping:', error)
         }
     }
 
@@ -155,9 +189,18 @@ const WhatsAppChatbots = () => {
                             chatbots.map((bot) => (
                                 <TableRow key={bot.id}>
                                     <TableCell>
-                                        <Stack direction='row' alignItems='center' spacing={1}>
-                                            <IconEye size={18} style={{ cursor: 'pointer' }} color={theme.palette.primary.main} />
-                                            <Typography variant='body1' sx={{ fontWeight: 500 }}>
+                                        <Stack
+                                            direction='row'
+                                            alignItems='center'
+                                            spacing={1}
+                                            style={{ cursor: 'pointer' }}
+                                            onClick={() => handleOpenEditDialog(bot)}
+                                        >
+                                            <IconEye size={18} color={theme.palette.primary.main} />
+                                            <Typography
+                                                variant='body1'
+                                                sx={{ fontWeight: 500, '&:hover': { textDecoration: 'underline' } }}
+                                            >
                                                 {bot.title}
                                             </Typography>
                                         </Stack>
@@ -188,10 +231,10 @@ const WhatsAppChatbots = () => {
                 </Table>
             </TableContainer>
 
-            {/* Add Chatbot Dialog */}
+            {/* Add/Edit Chatbot Dialog */}
             <Dialog open={openAddDialog} onClose={handleCloseAddDialog} maxWidth='sm' fullWidth>
                 <DialogTitle>
-                    <Typography variant='h4'>Add Chatbot</Typography>
+                    <Typography variant='h4'>{isEditMode ? 'Edit Chatbot Settings' : 'Add Chatbot'}</Typography>
                 </DialogTitle>
                 <DialogContent>
                     <Stack spacing={3} sx={{ pt: 2 }}>
@@ -204,7 +247,7 @@ const WhatsAppChatbots = () => {
                             placeholder='Enter webhook title...'
                         />
 
-                        <FormControl fullWidth>
+                        <FormControl fullWidth disabled={isEditMode}>
                             <InputLabel id='select-origin-label'>Select Origin (WhatsApp Device)</InputLabel>
                             <Select
                                 labelId='select-origin-label'
@@ -220,7 +263,7 @@ const WhatsAppChatbots = () => {
                             </Select>
                         </FormControl>
 
-                        <FormControl fullWidth>
+                        <FormControl fullWidth disabled={isEditMode}>
                             <InputLabel id='select-flow-label'>Select Automation Flow (Chatflow)</InputLabel>
                             <Select
                                 labelId='select-flow-label'
@@ -235,6 +278,54 @@ const WhatsAppChatbots = () => {
                                 ))}
                             </Select>
                         </FormControl>
+
+                        <Divider sx={{ my: 1 }} />
+
+                        <FormControlLabel
+                            control={
+                                <Switch
+                                    checked={isFollowUpEnabled}
+                                    onChange={(e) => setIsFollowUpEnabled(e.target.checked)}
+                                    color='primary'
+                                />
+                            }
+                            label='Enable Auto Follow-Up (تفعيل المتابعة التلقائية)'
+                        />
+
+                        {isFollowUpEnabled && (
+                            <>
+                                <TextField
+                                    fullWidth
+                                    label='Follow-Up Delay (minutes)'
+                                    type='number'
+                                    variant='outlined'
+                                    value={followUpDelayMinutes}
+                                    onChange={(e) => setFollowUpDelayMinutes(e.target.value)}
+                                    helperText='How long to wait after our last message before evaluating (e.g., 1440 for 24h, 5 for testing)'
+                                />
+
+                                <TextField
+                                    fullWidth
+                                    label='Follow-Up System Prompt'
+                                    variant='outlined'
+                                    multiline
+                                    rows={8}
+                                    value={followUpSystemPrompt}
+                                    onChange={(e) => setFollowUpSystemPrompt(e.target.value)}
+                                    placeholder={`Based on the following chat history, decide whether to send a friendly follow-up:
+{chat_history}
+
+Decision Rules:
+1. Output 'Decision: YES' if they showed interest.
+2. Otherwise output 'Decision: NO'.
+
+Required Response Format:
+Decision: [YES / NO]
+Message: [The follow-up message text]`}
+                                    helperText='Use {chat_history} to inject the chat history. The LLM must output "Decision: YES/NO" and "Message: [text]".'
+                                />
+                            </>
+                        )}
                     </Stack>
                 </DialogContent>
                 <DialogActions sx={{ p: 2, pt: 0 }}>
@@ -242,7 +333,7 @@ const WhatsAppChatbots = () => {
                         Cancel
                     </Button>
                     <Button
-                        onClick={handleCreateChatbot}
+                        onClick={handleSaveChatbot}
                         color='success'
                         variant='contained'
                         disabled={!newChatbotTitle || !selectedDeviceId || !selectedChatflowId}

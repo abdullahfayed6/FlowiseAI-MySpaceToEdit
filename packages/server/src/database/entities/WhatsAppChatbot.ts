@@ -17,6 +17,15 @@ export class WhatsAppChatbot {
     @Column({ default: true })
     isActive: boolean
 
+    @Column({ default: false })
+    isFollowUpEnabled: boolean
+
+    @Column({ default: 1440 })
+    followUpDelayMinutes: number
+
+    @Column({ type: 'text', nullable: true })
+    followUpSystemPrompt: string
+
     @CreateDateColumn()
     createdDate: Date
 
