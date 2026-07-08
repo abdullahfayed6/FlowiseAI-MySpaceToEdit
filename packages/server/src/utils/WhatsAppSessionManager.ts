@@ -61,6 +61,8 @@ export class SimpleStore {
     public pnToLid: Map<string, string> = new Map()
 
     private filePath: string
+    // Unix timestamp (seconds): only show chats/messages that arrived after this time
+    public connectedAt: number = 0
 
     constructor(filePath: string) {
         this.filePath = filePath
@@ -261,8 +263,11 @@ export class SimpleStore {
         })
     }
 
-    /** Does this chat (under any alias key) have at least one stored message? */
-    private hasMessages(c: ChatRecord): boolean {
+    /**
+     * Does this chat have at least one stored message that arrived after connectedAt?
+     * This ensures the inbox only shows chats that contacted the bot after linking.
+     */
+    private hasPostConnectionMessages(c: ChatRecord): boolean {
         const keys = [c.id]
         const pn = c.pnJid || this.lidToPn.get(c.id)
         if (pn) keys.push(pn)
@@ -270,20 +275,30 @@ export class SimpleStore {
             const lid = this.pnToLid.get(c.id)
             if (lid) keys.push(lid)
         }
-        return keys.some((k) => (this.messages.get(k)?.size || 0) > 0)
+        return keys.some((k) => {
+            const bucket = this.messages.get(k)
+            if (!bucket || bucket.size === 0) return false
+            // Check if any message in this bucket is after connectedAt
+            for (const msg of bucket.values()) {
+                const ts = coerceTimestamp(msg.messageTimestamp)
+                if (ts >= this.connectedAt) return true
+            }
+            return false
+        })
     }
 
     /**
-     * Private chats that actually have messages, deduped so a contact known under both its @lid and
-     * @s.whatsapp.net JIDs shows as a single row. Display label is always the phone number (not the
-     * saved contact name). The row's `id` prefers the phone JID so replies target it directly.
+     * Private chats that actually have messages AFTER connectedAt, deduped so a contact known under
+     * both its @lid and @s.whatsapp.net JIDs shows as a single row. Display label is always the
+     * phone number (not the saved contact name). The row's `id` prefers the phone JID so replies
+     * target it directly.
      */
     listChats() {
         const groups = new Map<string, { id: string; number: string; unreadCount: number; timestamp: number }>()
 
         for (const c of this.chats.values()) {
             if (!(c.id.endsWith('@lid') || c.id.endsWith('@s.whatsapp.net'))) continue
-            if (!this.hasMessages(c)) continue
+            if (!this.hasPostConnectionMessages(c)) continue
 
             const pn = c.pnJid || this.lidToPn.get(c.id)
             // Group key = phone number when known, else the raw id (LID with no known PN).
@@ -327,7 +342,9 @@ export class SimpleStore {
             .sort((a, b) => b.timestamp - a.timestamp)
     }
 
-    /** Messages for a chat, merging any LID/PN alias keys, sorted oldest first. */
+    /** Messages for a chat, merging any LID/PN alias keys, sorted oldest first.
+     *  Only returns messages that arrived AFTER connectedAt.
+     */
     listMessages(chatId: string) {
         const keys = new Set<string>([chatId])
         const chat = this.chats.get(chatId)
@@ -349,11 +366,14 @@ export class SimpleStore {
                 const id = msg.key?.id
                 if (id && seen.has(id)) continue
                 if (id) seen.add(id)
+                const ts = coerceTimestamp(msg.messageTimestamp)
+                // Filter: only show messages after the bot was connected
+                if (ts < this.connectedAt) continue
                 out.push({
                     id,
                     body: extractBody(msg),
                     fromMe: msg.key?.fromMe || false,
-                    timestamp: coerceTimestamp(msg.messageTimestamp)
+                    timestamp: ts
                 })
             }
         }
@@ -372,7 +392,8 @@ export class SimpleStore {
             const data = {
                 chats: Array.from(this.chats.entries()),
                 messages: Array.from(this.messages.entries()).map(([jid, bucket]) => [jid, Array.from(bucket.entries())]),
-                lidToPn: Array.from(this.lidToPn.entries())
+                lidToPn: Array.from(this.lidToPn.entries()),
+                connectedAt: this.connectedAt
             }
             fs.writeFileSync(this.filePath, JSON.stringify(data), 'utf8')
         } catch (e: any) {
@@ -390,7 +411,10 @@ export class SimpleStore {
                 this.lidToPn.set(lid, pn)
                 this.pnToLid.set(pn, lid)
             }
-            logger.info(`[WhatsApp] Loaded store: ${this.chats.size} chats, ${this.messages.size} conversations.`)
+            if (data.connectedAt) this.connectedAt = data.connectedAt
+            logger.info(
+                `[WhatsApp] Loaded store: ${this.chats.size} chats, ${this.messages.size} conversations, connectedAt: ${this.connectedAt}`
+            )
         } catch (e: any) {
             logger.warn(`[WhatsApp] Failed to load store: ${e.message}`)
         }
@@ -404,6 +428,20 @@ export class WhatsAppSessionManager {
     private sessionNames: Map<string, string> = new Map()
     private initializing: Set<string> = new Set()
     private followUpTimer: NodeJS.Timeout | null = null
+
+    // Anti-ban: Rate limiting
+    private rateLimiter: Map<string, { count: number; resetTime: number }> = new Map()
+    private readonly MAX_MESSAGES_PER_MINUTE = 8
+    private readonly MIN_REPLY_DELAY_MS = 2000 // 2 seconds minimum
+    private readonly MAX_REPLY_DELAY_MS = 5000 // 5 seconds maximum
+
+    // Anti-ban: Exponential backoff for reconnections
+    private reconnectAttempts: Map<string, number> = new Map()
+    private readonly MAX_RECONNECT_DELAY_MS = 300000 // 5 minutes max
+
+    // Anti-ban: Message queue to serialize outgoing replies
+    private messageQueue: Map<string, Array<{ remoteJid: string; text: string; resolve: () => void }>> = new Map()
+    private processingQueue: Set<string> = new Set()
 
     private constructor() {
         const cleanup = () => {
@@ -427,6 +465,54 @@ export class WhatsAppSessionManager {
 
         // Start background AI follow-up checker
         this.startFollowUpChecker()
+    }
+
+    /**
+     * Anti-ban: Random delay between MIN and MAX to simulate human typing speed.
+     */
+    private randomDelay(): number {
+        return Math.floor(Math.random() * (this.MAX_REPLY_DELAY_MS - this.MIN_REPLY_DELAY_MS + 1)) + this.MIN_REPLY_DELAY_MS
+    }
+
+    /**
+     * Anti-ban: Check if we can send a message (rate limiting).
+     * Returns true if under the limit, false if we should wait.
+     */
+    private canSendMessage(deviceId: string): boolean {
+        const now = Date.now()
+        const limiter = this.rateLimiter.get(deviceId)
+
+        if (!limiter || now > limiter.resetTime) {
+            this.rateLimiter.set(deviceId, { count: 1, resetTime: now + 60000 })
+            return true
+        }
+
+        if (limiter.count < this.MAX_MESSAGES_PER_MINUTE) {
+            limiter.count++
+            return true
+        }
+
+        return false
+    }
+
+    /**
+     * Anti-ban: Simulate typing indicator before sending a reply.
+     * Duration scales with message length to appear natural.
+     */
+    private async simulateTyping(sock: WASocket, remoteJid: string, messageLength: number): Promise<void> {
+        try {
+            // Calculate typing duration: ~1 second per 50 characters, min 1.5s, max 4s
+            const typingDuration = Math.min(Math.max(Math.ceil(messageLength / 50) * 1000, 1500), 4000)
+
+            await sock.presenceSubscribe(remoteJid)
+            await new Promise((resolve) => setTimeout(resolve, 300)) // Small gap before "composing"
+            await sock.sendPresenceUpdate('composing', remoteJid)
+            await new Promise((resolve) => setTimeout(resolve, typingDuration))
+            await sock.sendPresenceUpdate('paused', remoteJid)
+        } catch (err: any) {
+            // Non-critical: if presence fails, still send the message
+            logger.debug(`[WhatsApp Anti-Ban] Typing simulation failed for ${remoteJid}: ${err.message}`)
+        }
     }
 
     public static getInstance(): WhatsAppSessionManager {
@@ -457,6 +543,13 @@ export class WhatsAppSessionManager {
             try {
                 await dataSource.query('ALTER TABLE whatsapp_chatbot ADD COLUMN followUpSystemPrompt TEXT')
                 logger.info('[WhatsApp DB] Added column followUpSystemPrompt to whatsapp_chatbot table')
+            } catch (e) {
+                // ignore if column already exists
+            }
+            // Add connectedAt to whatsapp_device
+            try {
+                await dataSource.query('ALTER TABLE whatsapp_device ADD COLUMN connectedAt BIGINT')
+                logger.info('[WhatsApp DB] Added column connectedAt to whatsapp_device table')
             } catch (e) {
                 // ignore if column already exists
             }
@@ -530,6 +623,10 @@ export class WhatsAppSessionManager {
 
         const store = new SimpleStore(storePath)
         store.load()
+        // Load connectedAt from device DB so filtering persists across server restarts
+        if (device.connectedAt) {
+            store.connectedAt = Number(device.connectedAt)
+        }
         this.stores.set(deviceId, store)
 
         // Fetch latest WhatsApp Web version to prevent connection failure rejects
@@ -548,7 +645,8 @@ export class WhatsAppSessionManager {
             logger: pinoLogger,
             browser: ['Windows', 'Chrome', '120.0.0'],
             markOnlineOnConnect: false,
-            syncFullHistory: true
+            syncFullHistory: false, // Anti-ban: avoid bulk history sync that triggers spam detection
+            generateHighQualityLinkPreview: true
         })
 
         store.bind(sock.ev)
@@ -579,9 +677,18 @@ export class WhatsAppSessionManager {
                 if (rawJid) {
                     device.phoneNumber = rawJid.split(':')[0].split('@')[0]
                 }
+                // Set connectedAt only on first connection (not on reconnects)
+                if (!device.connectedAt) {
+                    device.connectedAt = Math.floor(Date.now() / 1000)
+                    logger.info(`[WhatsApp Device ${device.name}] First connection. connectedAt set to ${device.connectedAt}`)
+                }
+                // Pass connectedAt to the store for filtering
+                store.connectedAt = device.connectedAt
                 await deviceRepo.save(device)
                 logger.info(`[WhatsApp Device ${device.name}] Connected. Number: ${device.phoneNumber || 'unknown'}`)
                 this.initializing.delete(deviceId)
+                // Anti-ban: Reset reconnect counter on successful connection
+                this.reconnectAttempts.delete(deviceId)
             }
 
             if (connection === 'close') {
@@ -596,15 +703,22 @@ export class WhatsAppSessionManager {
                     this.initializing.delete(deviceId)
                     this.clients.delete(deviceId)
                     this.stores.delete(deviceId)
+                    // Anti-ban: Exponential backoff - 10s, 20s, 40s, 80s... up to 5 min max
+                    const attempt = (this.reconnectAttempts.get(deviceId) || 0) + 1
+                    this.reconnectAttempts.set(deviceId, attempt)
+                    const delay = Math.min(10000 * Math.pow(2, attempt - 1), this.MAX_RECONNECT_DELAY_MS)
+                    logger.info(`[WhatsApp Device ${device.name}] Reconnecting in ${Math.round(delay / 1000)}s (attempt ${attempt})`)
                     setTimeout(() => {
                         this.initSession(deviceId).catch((err) => {
                             logger.error(`Failed to reconnect WhatsApp session ${device.name}:`, err.message)
                         })
-                    }, 5000)
+                    }, delay)
                 } else {
                     device.status = 'DISCONNECTED'
                     device.qrCode = undefined
                     device.phoneNumber = undefined
+                    // Reset connectedAt on logout so next link starts fresh
+                    device.connectedAt = undefined
                     await deviceRepo.save(device)
                     this.initializing.delete(deviceId)
                     this.clients.delete(deviceId)
@@ -683,7 +797,18 @@ export class WhatsAppSessionManager {
                     const activeChatbot = await chatbotRepo.findOneBy({ deviceId: device.id, isActive: true })
                     if (!activeChatbot) continue
 
+                    // Anti-ban: Check rate limit before processing
+                    if (!this.canSendMessage(deviceId)) {
+                        logger.warn(`[WhatsApp Anti-Ban] Rate limit reached for device ${device.name}. Skipping reply to ${senderId}`)
+                        continue
+                    }
+
                     logger.info(`[WhatsApp Chatbot ${activeChatbot.title}] Processing auto-reply for ${senderId}`)
+
+                    // Anti-ban: Add random delay before processing to appear human-like
+                    const preDelay = this.randomDelay()
+                    logger.debug(`[WhatsApp Anti-Ban] Waiting ${preDelay}ms before processing reply for ${senderId}`)
+                    await new Promise((resolve) => setTimeout(resolve, preDelay))
 
                     const mockReq = {
                         params: { id: activeChatbot.chatflowId },
@@ -705,6 +830,9 @@ export class WhatsAppSessionManager {
                     const replyText = result.text || result.output || (typeof result === 'string' ? result : JSON.stringify(result))
 
                     logger.info(`[WhatsApp Chatbot ${activeChatbot.title}] Replying to ${remoteJid}: ${replyText}`)
+
+                    // Anti-ban: Show typing indicator before sending the reply
+                    await this.simulateTyping(sock, remoteJid, replyText.length)
 
                     // Baileys 7.x resolves LID addressing, attaches tctoken/cstoken and handles the
                     // reachout-timelock natively — so a plain reply on the incoming JID is delivered.
@@ -756,6 +884,8 @@ export class WhatsAppSessionManager {
             device.status = 'DISCONNECTED'
             device.qrCode = undefined
             device.phoneNumber = undefined
+            // Reset connectedAt so next connection starts with a fresh timestamp
+            device.connectedAt = undefined
             await deviceRepo.save(device)
 
             const sessionsDir = path.join(os.homedir(), '.flowise', 'whatsapp_sessions')

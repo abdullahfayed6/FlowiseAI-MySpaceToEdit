@@ -20,6 +20,9 @@ export class WhatsAppDevice {
     @Column({ type: 'text', nullable: true })
     qrCode?: string
 
+    @Column({ type: 'bigint', nullable: true })
+    connectedAt?: number
+
     @CreateDateColumn()
     createdDate: Date
 
