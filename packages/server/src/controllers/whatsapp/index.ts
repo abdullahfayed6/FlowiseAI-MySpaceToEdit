@@ -127,7 +127,18 @@ const getChatbots = async (req: Request, res: Response, next: NextFunction) => {
 
 const addChatbot = async (req: Request, res: Response, next: NextFunction) => {
     try {
-        const { title, deviceId, chatflowId, isFollowUpEnabled, followUpDelayMinutes, followUpSystemPrompt } = req.body
+        const {
+            title,
+            deviceId,
+            chatflowId,
+            isFollowUpEnabled,
+            followUpDelayMinutes,
+            followUpSystemPrompt,
+            businessHoursEnabled,
+            businessHoursStart,
+            businessHoursEnd,
+            outsideHoursMessage
+        } = req.body
         if (!title || !deviceId || !chatflowId) {
             return res.status(400).json({ error: 'Title, deviceId, and chatflowId are required' })
         }
@@ -141,6 +152,10 @@ const addChatbot = async (req: Request, res: Response, next: NextFunction) => {
         if (typeof isFollowUpEnabled === 'boolean') chatbot.isFollowUpEnabled = isFollowUpEnabled
         if (typeof followUpDelayMinutes === 'number') chatbot.followUpDelayMinutes = followUpDelayMinutes
         if (typeof followUpSystemPrompt === 'string') chatbot.followUpSystemPrompt = followUpSystemPrompt
+        if (typeof businessHoursEnabled === 'boolean') chatbot.businessHoursEnabled = businessHoursEnabled
+        if (typeof businessHoursStart === 'string') chatbot.businessHoursStart = businessHoursStart
+        if (typeof businessHoursEnd === 'string') chatbot.businessHoursEnd = businessHoursEnd
+        if (typeof outsideHoursMessage === 'string') chatbot.outsideHoursMessage = outsideHoursMessage
 
         const savedChatbot = await repo.save(chatbot)
         return res.status(201).json(savedChatbot)
@@ -152,7 +167,19 @@ const addChatbot = async (req: Request, res: Response, next: NextFunction) => {
 const updateChatbot = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const { id } = req.params
-        const { isActive, title, deviceId, chatflowId, isFollowUpEnabled, followUpDelayMinutes, followUpSystemPrompt } = req.body
+        const {
+            isActive,
+            title,
+            deviceId,
+            chatflowId,
+            isFollowUpEnabled,
+            followUpDelayMinutes,
+            followUpSystemPrompt,
+            businessHoursEnabled,
+            businessHoursStart,
+            businessHoursEnd,
+            outsideHoursMessage
+        } = req.body
 
         const repo = getDataSource().getRepository(WhatsAppChatbot)
         const chatbot = await repo.findOneBy({ id })
@@ -170,6 +197,10 @@ const updateChatbot = async (req: Request, res: Response, next: NextFunction) =>
         if (typeof isFollowUpEnabled === 'boolean') chatbot.isFollowUpEnabled = isFollowUpEnabled
         if (typeof followUpDelayMinutes === 'number') chatbot.followUpDelayMinutes = followUpDelayMinutes
         if (typeof followUpSystemPrompt === 'string') chatbot.followUpSystemPrompt = followUpSystemPrompt
+        if (typeof businessHoursEnabled === 'boolean') chatbot.businessHoursEnabled = businessHoursEnabled
+        if (typeof businessHoursStart === 'string') chatbot.businessHoursStart = businessHoursStart
+        if (typeof businessHoursEnd === 'string') chatbot.businessHoursEnd = businessHoursEnd
+        if (typeof outsideHoursMessage === 'string') chatbot.outsideHoursMessage = outsideHoursMessage
 
         const updatedChatbot = await repo.save(chatbot)
         return res.status(200).json(updatedChatbot)

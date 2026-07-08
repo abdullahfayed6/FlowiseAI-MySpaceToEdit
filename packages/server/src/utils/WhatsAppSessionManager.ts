@@ -45,6 +45,7 @@ interface ChatRecord {
     lastFollowUpSentForMsgId?: string
     lastFollowUpTimestamp?: number
     lastFollowUpTriggerId?: string
+    lastOutsideHoursMsg?: number // Unix timestamp: last time we sent outside-hours message
 }
 
 /**
@@ -515,6 +516,29 @@ export class WhatsAppSessionManager {
         }
     }
 
+    /**
+     * Business Hours: Check if the current time is within the configured business hours.
+     * Returns true if business hours are disabled (always available) or current time is within range.
+     */
+    private isWithinBusinessHours(chatbot: WhatsAppChatbot): boolean {
+        if (!chatbot.businessHoursEnabled) return true
+
+        const now = new Date()
+        const currentMinutes = now.getHours() * 60 + now.getMinutes()
+
+        const [startH, startM] = (chatbot.businessHoursStart || '09:00').split(':').map(Number)
+        const [endH, endM] = (chatbot.businessHoursEnd || '22:00').split(':').map(Number)
+        const startMinutes = startH * 60 + startM
+        const endMinutes = endH * 60 + endM
+
+        // Handle overnight ranges (e.g., 22:00 - 06:00)
+        if (startMinutes <= endMinutes) {
+            return currentMinutes >= startMinutes && currentMinutes <= endMinutes
+        } else {
+            return currentMinutes >= startMinutes || currentMinutes <= endMinutes
+        }
+    }
+
     public static getInstance(): WhatsAppSessionManager {
         if (!WhatsAppSessionManager.instance) {
             WhatsAppSessionManager.instance = new WhatsAppSessionManager()
@@ -552,6 +576,31 @@ export class WhatsAppSessionManager {
                 logger.info('[WhatsApp DB] Added column connectedAt to whatsapp_device table')
             } catch (e) {
                 // ignore if column already exists
+            }
+            // Add business hours columns
+            try {
+                await dataSource.query('ALTER TABLE whatsapp_chatbot ADD COLUMN businessHoursEnabled BOOLEAN DEFAULT 0')
+                logger.info('[WhatsApp DB] Added column businessHoursEnabled')
+            } catch (e) {
+                /* ignore */
+            }
+            try {
+                await dataSource.query("ALTER TABLE whatsapp_chatbot ADD COLUMN businessHoursStart TEXT DEFAULT '09:00'")
+                logger.info('[WhatsApp DB] Added column businessHoursStart')
+            } catch (e) {
+                /* ignore */
+            }
+            try {
+                await dataSource.query("ALTER TABLE whatsapp_chatbot ADD COLUMN businessHoursEnd TEXT DEFAULT '22:00'")
+                logger.info('[WhatsApp DB] Added column businessHoursEnd')
+            } catch (e) {
+                /* ignore */
+            }
+            try {
+                await dataSource.query('ALTER TABLE whatsapp_chatbot ADD COLUMN outsideHoursMessage TEXT')
+                logger.info('[WhatsApp DB] Added column outsideHoursMessage')
+            } catch (e) {
+                /* ignore */
             }
         } catch (err: any) {
             logger.error('[WhatsApp DB] Error executing column migrations:', err.message)
@@ -796,6 +845,55 @@ export class WhatsAppSessionManager {
                 try {
                     const activeChatbot = await chatbotRepo.findOneBy({ deviceId: device.id, isActive: true })
                     if (!activeChatbot) continue
+
+                    // Business Hours: Check if we're within operating hours
+                    if (!this.isWithinBusinessHours(activeChatbot)) {
+                        // Check if we already sent the away message today for this contact
+                        const chatRecord = store.chats.get(remoteJid)
+                        const aliasLid = remoteJid.endsWith('@lid') ? remoteJid : store.pnToLid.get(remoteJid)
+                        const aliasPn = remoteJid.endsWith('@s.whatsapp.net') ? remoteJid : store.lidToPn.get(remoteJid)
+                        const lastSent = Math.max(
+                            chatRecord?.lastOutsideHoursMsg || 0,
+                            (aliasLid ? store.chats.get(aliasLid)?.lastOutsideHoursMsg : 0) || 0,
+                            (aliasPn ? store.chats.get(aliasPn)?.lastOutsideHoursMsg : 0) || 0
+                        )
+
+                        // If already sent today → completely ignore (no reply at all)
+                        const today = new Date().toDateString()
+                        const lastSentDate = lastSent ? new Date(lastSent * 1000).toDateString() : ''
+                        if (today === lastSentDate) {
+                            logger.debug(`[WhatsApp Business Hours] Already sent away message today to ${senderId}. Ignoring.`)
+                            continue
+                        }
+
+                        // Rate limit check
+                        if (!this.canSendMessage(deviceId)) {
+                            logger.warn(`[WhatsApp Anti-Ban] Rate limit reached. Skipping away message to ${senderId}`)
+                            continue
+                        }
+
+                        // First message outside hours today → send away message once
+                        const outsideMsg =
+                            activeChatbot.outsideHoursMessage || 'شكراً لتواصلك! نحن حالياً خارج ساعات العمل وسنرد عليك في أقرب وقت ممكن.'
+                        logger.info(`[WhatsApp Business Hours] Outside hours for ${device.name}. Sending away message to ${senderId}`)
+                        await this.simulateTyping(sock, remoteJid, outsideMsg.length)
+                        await sock.sendMessage(remoteJid, { text: outsideMsg })
+
+                        // Record timestamp so we don't send again today
+                        const now = Math.floor(Date.now() / 1000)
+                        if (chatRecord) {
+                            chatRecord.lastOutsideHoursMsg = now
+                        } else {
+                            store.chats.set(remoteJid, {
+                                id: remoteJid,
+                                conversationTimestamp: now,
+                                unreadCount: 0,
+                                lastOutsideHoursMsg: now
+                            })
+                        }
+                        store.save()
+                        continue
+                    }
 
                     // Anti-ban: Check rate limit before processing
                     if (!this.canSendMessage(deviceId)) {

@@ -26,6 +26,18 @@ export class WhatsAppChatbot {
     @Column({ type: 'text', nullable: true })
     followUpSystemPrompt: string
 
+    @Column({ default: false })
+    businessHoursEnabled: boolean
+
+    @Column({ default: '09:00' })
+    businessHoursStart: string
+
+    @Column({ default: '22:00' })
+    businessHoursEnd: string
+
+    @Column({ type: 'text', nullable: true })
+    outsideHoursMessage: string
+
     @CreateDateColumn()
     createdDate: Date
 
