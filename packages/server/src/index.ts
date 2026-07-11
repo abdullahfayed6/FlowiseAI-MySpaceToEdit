@@ -90,12 +90,12 @@ export class App {
             await this.AppDataSource.initialize()
             logger.info('📦 [server]: Data Source initialized successfully')
 
+            // Auto-create WhatsApp tables if missing
+            await ensureWhatsAppTables(this.AppDataSource)
+
             // Run Migrations Scripts
             await this.AppDataSource.runMigrations({ transaction: 'each' })
             logger.info('🔄 [server]: Database migrations completed successfully')
-
-            // Auto-create WhatsApp tables if missing
-            await ensureWhatsAppTables(this.AppDataSource)
 
             // Auto-create default admin account if not exists
             await ensureDefaultAdminAccount(this.AppDataSource)
@@ -409,11 +409,14 @@ async function ensureWhatsAppTables(dataSource: DataSource) {
     const queryRunner = dataSource.createQueryRunner()
     try {
         const dbType = dataSource.options.type
+        const textCol = 'TEXT'
+        const dateCol = dbType === 'postgres' ? 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP' : 'DATETIME DEFAULT CURRENT_TIMESTAMP'
+        const boolCol = dbType === 'postgres' ? 'BOOLEAN DEFAULT TRUE' : 'BOOLEAN DEFAULT 1'
+        const bigIntCol = dbType === 'postgres' ? 'BIGINT' : 'INTEGER'
+
         const hasDeviceTable = await queryRunner.hasTable('whatsapp_device')
         if (!hasDeviceTable) {
             const idCol = dbType === 'postgres' ? 'UUID PRIMARY KEY' : 'VARCHAR(36) PRIMARY KEY'
-            const textCol = 'TEXT'
-            const dateCol = dbType === 'postgres' ? 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP' : 'DATETIME DEFAULT CURRENT_TIMESTAMP'
 
             await queryRunner.query(`
                 CREATE TABLE whatsapp_device (
@@ -423,18 +426,36 @@ async function ensureWhatsAppTables(dataSource: DataSource) {
                     phoneNumber VARCHAR(255),
                     status VARCHAR(50) DEFAULT 'DISCONNECTED',
                     qrCode ${textCol},
+                    connectedAt ${bigIntCol},
+                    createdBy ${textCol},
                     createdDate ${dateCol},
                     updatedDate ${dateCol}
                 );
             `)
             logger.info('Created whatsapp_device table')
+        } else {
+            // Check and add missing columns for existing table
+            const ensureDeviceColumn = async (colName: string, colType: string) => {
+                const columns = await queryRunner.query(
+                    dbType === 'postgres'
+                        ? `SELECT column_name FROM information_schema.columns WHERE table_name = 'whatsapp_device' AND column_name = '${colName}';`
+                        : `PRAGMA table_info(whatsapp_device);`
+                )
+                const exists = dbType === 'postgres'
+                    ? columns.length > 0
+                    : columns.some((col: any) => col.name === colName)
+                if (!exists) {
+                    await queryRunner.query(`ALTER TABLE whatsapp_device ADD COLUMN "${colName}" ${colType};`)
+                    logger.info(`Added missing column ${colName} to whatsapp_device`)
+                }
+            }
+            await ensureDeviceColumn('connectedAt', bigIntCol)
+            await ensureDeviceColumn('createdBy', textCol)
         }
 
         const hasChatbotTable = await queryRunner.hasTable('whatsapp_chatbot')
         if (!hasChatbotTable) {
             const idCol = dbType === 'postgres' ? 'UUID PRIMARY KEY' : 'VARCHAR(36) PRIMARY KEY'
-            const boolCol = dbType === 'postgres' ? 'BOOLEAN DEFAULT TRUE' : 'BOOLEAN DEFAULT 1'
-            const dateCol = dbType === 'postgres' ? 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP' : 'DATETIME DEFAULT CURRENT_TIMESTAMP'
 
             await queryRunner.query(`
                 CREATE TABLE whatsapp_chatbot (
@@ -443,11 +464,42 @@ async function ensureWhatsAppTables(dataSource: DataSource) {
                     deviceId VARCHAR(36) NOT NULL,
                     chatflowId VARCHAR(36) NOT NULL,
                     isActive ${boolCol},
+                    isFollowUpEnabled ${boolCol},
+                    followUpDelayMinutes INTEGER DEFAULT 1440,
+                    followUpSystemPrompt ${textCol},
+                    businessHoursEnabled ${boolCol},
+                    businessHoursStart VARCHAR(50) DEFAULT '09:00',
+                    businessHoursEnd VARCHAR(50) DEFAULT '22:00',
+                    outsideHoursMessage ${textCol},
                     createdDate ${dateCol},
                     updatedDate ${dateCol}
                 );
             `)
             logger.info('Created whatsapp_chatbot table')
+        } else {
+            // Check and add missing columns for existing table
+            const ensureChatbotColumn = async (colName: string, colType: string, defaultVal?: string) => {
+                const columns = await queryRunner.query(
+                    dbType === 'postgres'
+                        ? `SELECT column_name FROM information_schema.columns WHERE table_name = 'whatsapp_chatbot' AND column_name = '${colName}';`
+                        : `PRAGMA table_info(whatsapp_chatbot);`
+                )
+                const exists = dbType === 'postgres'
+                    ? columns.length > 0
+                    : columns.some((col: any) => col.name === colName)
+                if (!exists) {
+                    const defaultSql = defaultVal !== undefined ? ` DEFAULT ${defaultVal}` : ''
+                    await queryRunner.query(`ALTER TABLE whatsapp_chatbot ADD COLUMN "${colName}" ${colType}${defaultSql};`)
+                    logger.info(`Added missing column ${colName} to whatsapp_chatbot`)
+                }
+            }
+            await ensureChatbotColumn('isFollowUpEnabled', boolCol, dbType === 'postgres' ? 'FALSE' : '0')
+            await ensureChatbotColumn('followUpDelayMinutes', 'INTEGER', '1440')
+            await ensureChatbotColumn('followUpSystemPrompt', textCol)
+            await ensureChatbotColumn('businessHoursEnabled', boolCol, dbType === 'postgres' ? 'FALSE' : '0')
+            await ensureChatbotColumn('businessHoursStart', "VARCHAR(50)", "'09:00'")
+            await ensureChatbotColumn('businessHoursEnd', "VARCHAR(50)", "'22:00'")
+            await ensureChatbotColumn('outsideHoursMessage', textCol)
         }
     } catch (e: any) {
         logger.error('Error ensuring WhatsApp database tables:', e.message)
