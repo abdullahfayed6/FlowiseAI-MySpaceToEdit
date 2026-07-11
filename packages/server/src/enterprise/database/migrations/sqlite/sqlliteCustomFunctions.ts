@@ -6,6 +6,12 @@ export const ensureColumnExists = async (
     columnName: string,
     columnType: string // Accept column type as a parameter
 ): Promise<void> => {
+    // Check if table exists in sqlite_master first to avoid error on fresh databases where synchronizer hasn't run yet
+    const tableCheck = await queryRunner.query(`SELECT name FROM sqlite_master WHERE type='table' AND name='${tableName}';`)
+    if (tableCheck.length === 0) {
+        return
+    }
+
     // Retrieve column information from the specified table
     const columns = await queryRunner.query(`PRAGMA table_info(${tableName});`)
 
