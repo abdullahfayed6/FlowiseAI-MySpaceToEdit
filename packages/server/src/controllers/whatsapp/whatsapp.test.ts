@@ -3,10 +3,10 @@ import { Request, Response } from 'express'
 
 // Setup Mocks
 const mockRepository = {
-    find: jest.fn<any, any>(),
-    findOneBy: jest.fn<any, any>(),
-    save: jest.fn<any, any>(),
-    delete: jest.fn<any, any>()
+    find: jest.fn() as any,
+    findOneBy: jest.fn() as any,
+    save: jest.fn() as any,
+    delete: jest.fn() as any
 }
 const mockDataSource = {
     getRepository: jest.fn(() => mockRepository)
@@ -16,17 +16,18 @@ jest.mock('../../DataSource', () => ({
 }))
 
 const mockClient = {
-    sendMessage: jest.fn<any, any>(() => Promise.resolve({ key: { id: 'msg_123' }, status: 1, messageTimestamp: 1234567 })),
-    chatModify: jest.fn<any, any>(() => Promise.resolve()),
+    sendMessage: jest.fn(() => Promise.resolve({ key: { id: 'msg_123' }, status: 1, messageTimestamp: 1234567 })) as any,
+    chatModify: jest.fn(() => Promise.resolve()) as any,
     authState: { creds: { me: { id: 'device_jid@s.whatsapp.net' } } },
-    updateMediaMessage: jest.fn<any, any>()
+    updateMediaMessage: jest.fn() as any
 }
 const mockStore = {
-    listChats: jest.fn<any, any>(() => []),
-    listMessages: jest.fn<any, any>(() => []),
-    getRawMessage: jest.fn<any, any>(),
-    deleteChat: jest.fn<any, any>(),
-    pauseChat: jest.fn<any, any>(),
+    listChats: jest.fn(() => []) as any,
+    listMessages: jest.fn(() => []) as any,
+    getRawMessage: jest.fn() as any,
+    deleteChat: jest.fn() as any,
+    pauseChat: jest.fn() as any,
+    messages: new Map(),
     lidToPn: new Map(),
     pnToLid: new Map()
 }
@@ -41,7 +42,7 @@ jest.mock('../../utils/WhatsAppSessionManager', () => ({
 }))
 
 // Mock child_process and fs safely using requireActual
-const mockExec = jest.fn<any, any>((cmd: string, cb: any) => cb(null, { stdout: '', stderr: '' }))
+const mockExec = jest.fn((cmd: string, cb: any) => cb(null, { stdout: '', stderr: '' })) as any
 jest.mock('child_process', () => {
     const actual = jest.requireActual('child_process') as any
     return {
@@ -50,13 +51,13 @@ jest.mock('child_process', () => {
     }
 })
 
-const mockExistsSync = jest.fn<any, any>((path: string) => {
+const mockExistsSync = jest.fn((path: string) => {
     if (path.includes('output_') || path.includes('input_')) return true
     return true
-})
-const mockWriteFile = jest.fn<any, any>(() => Promise.resolve())
-const mockReadFile = jest.fn<any, any>(() => Promise.resolve(Buffer.from('mock_ogg_data')))
-const mockUnlink = jest.fn<any, any>(() => Promise.resolve())
+}) as any
+const mockWriteFile = jest.fn(() => Promise.resolve()) as any
+const mockReadFile = jest.fn(() => Promise.resolve(Buffer.from('mock_ogg_data'))) as any
+const mockUnlink = jest.fn(() => Promise.resolve()) as any
 
 jest.mock('fs', () => {
     const actual = jest.requireActual('fs') as any
