@@ -23,7 +23,9 @@ export default {
     // Inbox
     getChats: (deviceId) => client.get(`/whatsapp/devices/${deviceId}/chats`),
     getMessages: (deviceId, chatId) => client.get(`/whatsapp/devices/${deviceId}/chats/${chatId}/messages`),
-    sendMessage: (deviceId, chatId, text) => client.post(`/whatsapp/devices/${deviceId}/chats/${chatId}/messages`, { text }),
+    sendMessage: (deviceId, chatId, text, file) => client.post(`/whatsapp/devices/${deviceId}/chats/${chatId}/messages`, { text, file }),
     toggleChatAI: (deviceId, chatId, isPaused) => client.post(`/whatsapp/devices/${deviceId}/chats/${chatId}/toggle-ai`, { isPaused }),
-    deleteChat: (deviceId, chatId) => client.delete(`/whatsapp/devices/${deviceId}/chats/${chatId}`)
+    deleteChat: (deviceId, chatId) => client.delete(`/whatsapp/devices/${deviceId}/chats/${chatId}`),
+    getMessageMedia: (deviceId, chatId, messageId) =>
+        client.get(`/whatsapp/devices/${deviceId}/chats/${chatId}/messages/${messageId}/media`, { responseType: 'blob' })
 }

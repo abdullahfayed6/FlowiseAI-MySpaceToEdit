@@ -52,6 +52,12 @@ const WhatsAppChatbots = () => {
     const [followUpDelayMinutes, setFollowUpDelayMinutes] = useState(1440)
     const [followUpSystemPrompt, setFollowUpSystemPrompt] = useState('')
 
+    // Business Hours settings
+    const [businessHoursEnabled, setBusinessHoursEnabled] = useState(false)
+    const [businessHoursStart, setBusinessHoursStart] = useState('09:00')
+    const [businessHoursEnd, setBusinessHoursEnd] = useState('22:00')
+    const [outsideHoursMessage, setOutsideHoursMessage] = useState('')
+
     const fetchAllData = async () => {
         try {
             const botsRes = await whatsappApi.getChatbots()
@@ -80,6 +86,10 @@ const WhatsAppChatbots = () => {
         setIsFollowUpEnabled(false)
         setFollowUpDelayMinutes(1440)
         setFollowUpSystemPrompt('')
+        setBusinessHoursEnabled(false)
+        setBusinessHoursStart('09:00')
+        setBusinessHoursEnd('22:00')
+        setOutsideHoursMessage('')
         setOpenAddDialog(true)
     }
 
@@ -92,6 +102,10 @@ const WhatsAppChatbots = () => {
         setIsFollowUpEnabled(bot.isFollowUpEnabled || false)
         setFollowUpDelayMinutes(bot.followUpDelayMinutes !== undefined ? bot.followUpDelayMinutes : 1440)
         setFollowUpSystemPrompt(bot.followUpSystemPrompt || '')
+        setBusinessHoursEnabled(bot.businessHoursEnabled || false)
+        setBusinessHoursStart(bot.businessHoursStart || '09:00')
+        setBusinessHoursEnd(bot.businessHoursEnd || '22:00')
+        setOutsideHoursMessage(bot.outsideHoursMessage || '')
         setOpenAddDialog(true)
     }
 
@@ -108,7 +122,11 @@ const WhatsAppChatbots = () => {
                 chatflowId: selectedChatflowId,
                 isFollowUpEnabled,
                 followUpDelayMinutes: Number(followUpDelayMinutes),
-                followUpSystemPrompt
+                followUpSystemPrompt,
+                businessHoursEnabled,
+                businessHoursStart,
+                businessHoursEnd,
+                outsideHoursMessage
             }
 
             if (isEditMode) {
@@ -323,6 +341,56 @@ Required Response Format:
 Decision: [YES / NO]
 Message: [The follow-up message text]`}
                                     helperText='Use {chat_history} to inject the chat history. The LLM must output "Decision: YES/NO" and "Message: [text]".'
+                                />
+                            </>
+                        )}
+
+                        <Divider sx={{ my: 1 }} />
+
+                        <FormControlLabel
+                            control={
+                                <Switch
+                                    checked={businessHoursEnabled}
+                                    onChange={(e) => setBusinessHoursEnabled(e.target.checked)}
+                                    color='primary'
+                                />
+                            }
+                            label='Enable Business Hours (تفعيل ساعات العمل)'
+                        />
+
+                        {businessHoursEnabled && (
+                            <>
+                                <Stack direction='row' spacing={2}>
+                                    <TextField
+                                        fullWidth
+                                        label='Business Hours Start'
+                                        type='time'
+                                        variant='outlined'
+                                        value={businessHoursStart}
+                                        onChange={(e) => setBusinessHoursStart(e.target.value)}
+                                        InputLabelProps={{ shrink: true }}
+                                    />
+                                    <TextField
+                                        fullWidth
+                                        label='Business Hours End'
+                                        type='time'
+                                        variant='outlined'
+                                        value={businessHoursEnd}
+                                        onChange={(e) => setBusinessHoursEnd(e.target.value)}
+                                        InputLabelProps={{ shrink: true }}
+                                    />
+                                </Stack>
+
+                                <TextField
+                                    fullWidth
+                                    label='Away Message (الرسالة خارج ساعات العمل)'
+                                    variant='outlined'
+                                    multiline
+                                    rows={4}
+                                    value={outsideHoursMessage}
+                                    onChange={(e) => setOutsideHoursMessage(e.target.value)}
+                                    placeholder='شكراً لتواصلك! نحن حالياً خارج ساعات العمل وسنرد عليك في أقرب وقت ممكن.'
+                                    helperText='This message will be sent once a day if a user contacts you outside business hours.'
                                 />
                             </>
                         )}

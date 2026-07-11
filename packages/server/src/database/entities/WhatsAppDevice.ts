@@ -23,6 +23,9 @@ export class WhatsAppDevice {
     @Column({ type: 'bigint', nullable: true })
     connectedAt?: number
 
+    @Column({ nullable: true })
+    createdBy?: string
+
     @CreateDateColumn()
     createdDate: Date
 

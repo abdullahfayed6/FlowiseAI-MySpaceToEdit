@@ -3,6 +3,15 @@ import * as path from 'path'
 import * as fs from 'fs'
 import * as os from 'os'
 import { Request } from 'express'
+
+// Suppress verbose Baileys "Closing session: SessionEntry" console.log outputs
+const originalConsoleLog = console.log
+console.log = function (...args: any[]) {
+    if (args[0] && typeof args[0] === 'string' && args[0].includes('Closing session: SessionEntry')) {
+        return
+    }
+    originalConsoleLog.apply(console, args)
+}
 import { getDataSource } from '../DataSource'
 import { WhatsAppDevice } from '../database/entities/WhatsAppDevice'
 import { WhatsAppChatbot } from '../database/entities/WhatsAppChatbot'
@@ -16,6 +25,7 @@ const pinoLogger: any = pino({ level: process.env.WHATSAPP_DEBUG || 'silent' })
 
 const coerceTimestamp = (ts: any): number => {
     if (typeof ts === 'number') return ts
+    if (typeof ts === 'bigint') return Number(ts)
     if (typeof ts === 'string') {
         const parsed = parseInt(ts, 10)
         return isNaN(parsed) ? 0 : parsed
@@ -26,13 +36,31 @@ const coerceTimestamp = (ts: any): number => {
 }
 
 const extractBody = (msg: any): string => {
-    return (
+    const text =
         msg?.message?.conversation ||
         msg?.message?.extendedTextMessage?.text ||
         msg?.message?.imageMessage?.caption ||
         msg?.message?.videoMessage?.caption ||
+        msg?.message?.documentMessage?.caption ||
+        msg?.message?.documentWithCaptionMessage?.message?.documentMessage?.caption ||
         ''
-    )
+
+    if (text) return text
+
+    // Fallbacks for media without caption
+    if (msg?.message?.imageMessage) return '📷 Photo'
+    if (msg?.message?.videoMessage) return '🎥 Video'
+    if (msg?.message?.audioMessage) return '🎵 Audio message'
+    if (msg?.message?.documentMessage) {
+        const filename = msg.message.documentMessage.fileName || 'document'
+        return `📄 Document: ${filename}`
+    }
+    if (msg?.message?.documentWithCaptionMessage?.message?.documentMessage) {
+        const filename = msg.message.documentWithCaptionMessage.message.documentMessage.fileName || 'document'
+        return `📄 Document: ${filename}`
+    }
+
+    return ''
 }
 
 interface ChatRecord {
@@ -381,9 +409,41 @@ export class SimpleStore {
         return out.sort((a, b) => a.timestamp - b.timestamp)
     }
 
+    getRawMessage(chatId: string, messageId: string): any {
+        const keys = [chatId]
+        const pn = chatId.endsWith('@s.whatsapp.net') ? chatId : this.lidToPn.get(chatId)
+        if (pn && !keys.includes(pn)) keys.push(pn)
+        const lid = chatId.endsWith('@lid') ? chatId : this.pnToLid.get(chatId)
+        if (lid && !keys.includes(lid)) keys.push(lid)
+
+        for (const key of keys) {
+            const bucket = this.messages.get(key)
+            if (bucket) {
+                const msg = bucket.get(messageId)
+                if (msg) return msg
+            }
+        }
+        return null
+    }
+
     deleteChat(chatId: string) {
         this.chats.delete(chatId)
         this.messages.delete(chatId)
+
+        const pn = chatId.endsWith('@s.whatsapp.net') ? chatId : this.lidToPn.get(chatId)
+        const lid = chatId.endsWith('@lid') ? chatId : this.pnToLid.get(chatId)
+
+        if (pn) {
+            this.chats.delete(pn)
+            this.messages.delete(pn)
+            this.pnToLid.delete(pn)
+        }
+        if (lid) {
+            this.chats.delete(lid)
+            this.messages.delete(lid)
+            this.lidToPn.delete(lid)
+        }
+        this.save()
     }
 
     save() {

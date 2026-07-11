@@ -18,18 +18,10 @@ export function isInvalidDateTime(dateTime: unknown): boolean {
 }
 
 export function isInvalidPassword(password: unknown): boolean {
-    // Minimum Length: At least 8 characters
-    // Maximum Length: No more than 128 characters
-    // Lowercase Letter: Must contain at least one lowercase letter (a-z)
-    // Uppercase Letter: Must contain at least one uppercase letter (A-Z)
-    // Digit: Must contain at least one number (0-9)
-    // Special Character: Must contain at least one special character (anything that's not a letter or number)
-    if (!password || typeof password !== 'string' || password.length > 128) {
+    if (!password || typeof password !== 'string' || password.length > 128 || password.length < 4) {
         return true
     }
-
-    const regexPassword = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^a-zA-Z0-9]).{8,}$/
-    return !regexPassword.test(password)
+    return false
 }
 
 /**

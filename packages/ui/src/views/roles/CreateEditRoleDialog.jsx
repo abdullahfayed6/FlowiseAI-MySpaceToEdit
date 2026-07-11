@@ -160,7 +160,7 @@ const CreateEditRoleDialog = ({ show, dialogProps, onCancel, onConfirm, setError
             const permissions = getAllPermissionsApi.data
             Object.keys(permissions).forEach((category) => {
                 permissions[category] = permissions[category].filter((permission) => {
-                    if (isOpenSource) return permission.isOpenSource
+                    if (isOpenSource) return true
                     if (isEnterpriseLicensed) return permission.isEnterprise
                     if (isCloud) return permission.isCloud
                     return false // fallback - show nothing if no platform is set
@@ -172,7 +172,17 @@ const CreateEditRoleDialog = ({ show, dialogProps, onCancel, onConfirm, setError
                     delete permissions[category]
                 }
             })
-            setPermissions(permissions)
+            // Reorder categories to make 'whatsapp' first
+            const orderedPermissions = {}
+            if (permissions.whatsapp) {
+                orderedPermissions.whatsapp = permissions.whatsapp
+            }
+            Object.keys(permissions).forEach((cat) => {
+                if (cat !== 'whatsapp') {
+                    orderedPermissions[cat] = permissions[cat]
+                }
+            })
+            setPermissions(orderedPermissions)
             if ((dialogProps.type === 'EDIT' || dialogProps.type === 'VIEW') && dialogProps.data) {
                 const dialogDataPermissions = JSON.parse(dialogData.permissions)
                 if (dialogDataPermissions && dialogDataPermissions.length > 0) {

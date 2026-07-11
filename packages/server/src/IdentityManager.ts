@@ -259,19 +259,27 @@ export class IdentityManager {
     }
 
     public async getFeaturesByPlan(subscriptionId: string, withoutCache: boolean = false) {
-        if (this.isEnterprise()) {
-            const features: Record<string, string> = {}
-            for (const feature of ENTERPRISE_FEATURE_FLAGS) {
-                features[feature] = 'true'
-            }
-            return features
-        } else if (this.isCloud()) {
-            if (!this.stripeManager || !subscriptionId) {
-                return {}
-            }
-            return await this.stripeManager.getFeaturesByPlan(subscriptionId, withoutCache)
+        const allFeatures = {
+            'feat:users': 'true',
+            'feat:roles': 'true',
+            'feat:workspaces': 'true',
+            'feat:sso-config': 'true',
+            'feat:login-activity': 'true',
+            'feat:logs': 'true',
+            'feat:datasets': 'true',
+            'feat:evaluations': 'true',
+            'feat:evaluators': 'true',
+            'feat:files': 'true',
+            'feat:account': 'true'
         }
-        return {}
+        if (this.stripeManager) {
+            if (!subscriptionId) {
+                return allFeatures
+            }
+            const stripeFeatures = await this.stripeManager.getFeaturesByPlan(subscriptionId, withoutCache)
+            return { ...allFeatures, ...stripeFeatures }
+        }
+        return allFeatures
     }
 
     public static checkFeatureByPlan(feature: string) {

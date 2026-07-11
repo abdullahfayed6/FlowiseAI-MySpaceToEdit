@@ -36,6 +36,9 @@ export class User {
     @Column({ type: 'varchar', length: 20, default: UserStatus.UNVERIFIED })
     status: string
 
+    @Column({ type: 'text', nullable: true })
+    allowedDevices?: string | null
+
     @CreateDateColumn()
     createdDate?: Date
 

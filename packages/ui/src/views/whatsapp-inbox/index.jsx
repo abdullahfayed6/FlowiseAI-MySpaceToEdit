@@ -20,13 +20,74 @@ import {
     FormControlLabel
 } from '@mui/material'
 import { useTheme } from '@mui/material/styles'
-import { IconSend, IconMessageCircle, IconRefresh, IconTrash } from '@tabler/icons-react'
+import {
+    IconSend,
+    IconMessageCircle,
+    IconRefresh,
+    IconTrash,
+    IconPaperclip,
+    IconX,
+    IconMicrophone,
+    IconPlayerStop
+} from '@tabler/icons-react'
 import moment from 'moment'
 
 // project imports
 import ViewHeader from '@/layout/MainLayout/ViewHeader'
 import whatsappApi from '@/api/whatsapp'
 import useNotifier from '@/utils/useNotifier'
+
+const AudioPlayer = ({ deviceId, chatId, messageId }) => {
+    const [audioUrl, setAudioUrl] = useState('')
+    const [loading, setLoading] = useState(true)
+    const [error, setError] = useState(false)
+
+    useEffect(() => {
+        let url = ''
+        const fetchAudio = async () => {
+            try {
+                const response = await whatsappApi.getMessageMedia(deviceId, chatId, messageId)
+                url = URL.createObjectURL(response.data)
+                setAudioUrl(url)
+            } catch (err) {
+                console.error('Failed to load audio message:', err)
+                setError(true)
+            } finally {
+                setLoading(false)
+            }
+        }
+        fetchAudio()
+
+        return () => {
+            if (url) URL.revokeObjectURL(url)
+        }
+    }, [deviceId, chatId, messageId])
+
+    if (loading)
+        return (
+            <Typography variant='caption' sx={{ display: 'block', minWidth: 200, color: 'text.secondary' }}>
+                Loading voice message...
+            </Typography>
+        )
+    if (error)
+        return (
+            <Typography variant='caption' sx={{ display: 'block', minWidth: 200, color: 'error.main' }}>
+                Failed to load voice message
+            </Typography>
+        )
+
+    return (
+        <Box sx={{ mt: 0.5, minWidth: 240 }}>
+            <audio controls src={audioUrl} style={{ width: '100%', height: '40px' }} />
+        </Box>
+    )
+}
+
+const formatMessageTime = (timestamp) => {
+    if (!timestamp) return ''
+    const val = Number(timestamp)
+    return val > 9999999999 ? moment(val).format('HH:mm') : moment.unix(val).format('HH:mm')
+}
 
 const WhatsAppInbox = () => {
     const theme = useTheme()
@@ -40,6 +101,85 @@ const WhatsAppInbox = () => {
 
     const [messages, setMessages] = useState([])
     const [messageInput, setMessageInput] = useState('')
+    const [selectedFile, setSelectedFile] = useState(null)
+
+    // Voice recording states
+    const [isRecording, setIsRecording] = useState(false)
+    const [mediaRecorder, setMediaRecorder] = useState(null)
+    const [recordingDuration, setRecordingDuration] = useState(0)
+    const [recordingIntervalId, setRecordingIntervalId] = useState(null)
+
+    const startRecording = async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+            const recorder = new MediaRecorder(stream)
+            const chunks = []
+
+            recorder.ondataavailable = (e) => {
+                if (e.data.size > 0) {
+                    chunks.push(e.data)
+                }
+            }
+
+            recorder.onstop = () => {
+                const blob = new Blob(chunks, { type: 'audio/webm' })
+                const file = new File([blob], 'voice-message.webm', { type: 'audio/webm' })
+                setSelectedFile(file)
+                stream.getTracks().forEach((track) => track.stop())
+            }
+
+            recorder.start()
+            setMediaRecorder(recorder)
+            setIsRecording(true)
+            setRecordingDuration(0)
+
+            const interval = setInterval(() => {
+                setRecordingDuration((prev) => prev + 1)
+            }, 1000)
+            setRecordingIntervalId(interval)
+        } catch (error) {
+            console.error('Error starting audio recording:', error)
+        }
+    }
+
+    const stopRecording = (shouldSave = true) => {
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+            if (!shouldSave) {
+                mediaRecorder.onstop = () => {
+                    mediaRecorder.stream.getTracks().forEach((track) => track.stop())
+                }
+            }
+            mediaRecorder.stop()
+        }
+        if (recordingIntervalId) {
+            clearInterval(recordingIntervalId)
+            setRecordingIntervalId(null)
+        }
+        setIsRecording(false)
+        setMediaRecorder(null)
+    }
+
+    const formatDuration = (seconds) => {
+        const mins = Math.floor(seconds / 60)
+        const secs = seconds % 60
+        return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+    }
+
+    const handleFileChange = (e) => {
+        if (e.target.files && e.target.files.length > 0) {
+            const file = e.target.files[0]
+            setSelectedFile(file)
+        }
+    }
+
+    const fileToBase64 = (file) => {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader()
+            reader.readAsDataURL(file)
+            reader.onload = () => resolve(reader.result)
+            reader.onerror = (error) => reject(error)
+        })
+    }
 
     const [loadingChats, setLoadingChats] = useState(false)
     const [loadingMessages, setLoadingMessages] = useState(false)
@@ -125,27 +265,67 @@ const WhatsAppInbox = () => {
     }, [messages])
 
     const handleSendMessage = async () => {
-        if (!messageInput.trim() || !selectedChat) return
+        if ((!messageInput.trim() && !selectedFile) || !selectedChat) return
         const text = messageInput
+        const file = selectedFile
         setMessageInput('')
+        setSelectedFile(null)
 
         // Optimistic UI update
+        let optimisticBody = text
+        if (file) {
+            if (file.type.startsWith('image/')) {
+                optimisticBody = text ? `📷 ${text}` : '📷 Photo'
+            } else if (file.type.startsWith('video/')) {
+                optimisticBody = text ? `🎥 ${text}` : '🎥 Video'
+            } else if (file.type.startsWith('audio/')) {
+                optimisticBody = '🎵 Audio message'
+            } else {
+                optimisticBody = `📄 Document: ${file.name}` + (text ? ` (${text})` : '')
+            }
+        }
+
         const tempMsg = {
             id: `temp_${Date.now()}`,
-            body: text,
+            body: optimisticBody,
             fromMe: true,
             timestamp: Math.floor(Date.now() / 1000)
         }
         setMessages((prev) => [...prev, tempMsg])
 
         try {
-            const res = await whatsappApi.sendMessage(selectedDeviceId, selectedChat.id, text)
+            let filePayload = null
+            if (file) {
+                const base64Data = await fileToBase64(file)
+                filePayload = {
+                    data: base64Data,
+                    name: file.name,
+                    mimeType: file.type
+                }
+            }
+
+            const res = await whatsappApi.sendMessage(selectedDeviceId, selectedChat.id, text, filePayload)
             if (res && res.data) {
                 // Update local chat isPaused state to true (AI Off / Manual) since human replied
                 const updatedChat = { ...selectedChat, isPaused: true }
                 setSelectedChat(updatedChat)
                 setChats((prev) => prev.map((c) => (c.id === selectedChat.id ? updatedChat : c)))
-                fetchMessages(false)
+
+                const serverTs = res.data.timestamp
+                    ? typeof res.data.timestamp === 'object' && res.data.timestamp.low
+                        ? res.data.timestamp.low
+                        : Number(res.data.timestamp)
+                    : Math.floor(Date.now() / 1000)
+                const actualMsg = {
+                    id: res.data.id,
+                    body: res.data.body,
+                    fromMe: true,
+                    timestamp: serverTs
+                }
+                setMessages((prev) => {
+                    const filtered = prev.filter((m) => !m.id.startsWith('temp_'))
+                    return [...filtered, actualMsg].sort((a, b) => a.timestamp - b.timestamp)
+                })
             }
         } catch (error) {
             console.error('Error sending message', error)
@@ -335,14 +515,22 @@ const WhatsAppInbox = () => {
                                                         borderRadius: 2
                                                     }}
                                                 >
-                                                    <Typography variant='body1' sx={{ wordBreak: 'break-word' }}>
-                                                        {msg.body}
-                                                    </Typography>
+                                                    {msg.body === '🎵 Audio message' || msg.body?.startsWith('🎵 Audio message') ? (
+                                                        <AudioPlayer
+                                                            deviceId={selectedDeviceId}
+                                                            chatId={selectedChat.id}
+                                                            messageId={msg.id}
+                                                        />
+                                                    ) : (
+                                                        <Typography variant='body1' sx={{ wordBreak: 'break-word' }}>
+                                                            {msg.body}
+                                                        </Typography>
+                                                    )}
                                                     <Typography
                                                         variant='caption'
                                                         sx={{ display: 'block', textAlign: 'right', mt: 0.5, color: 'text.secondary' }}
                                                     >
-                                                        {msg.timestamp ? moment.unix(msg.timestamp).format('HH:mm') : ''}
+                                                        {formatMessageTime(msg.timestamp)}
                                                     </Typography>
                                                 </Paper>
                                             </Box>
@@ -352,20 +540,92 @@ const WhatsAppInbox = () => {
                                 </Box>
                                 <Divider />
                                 <Box sx={{ p: 2, bgcolor: 'background.paper' }}>
-                                    <Stack direction='row' spacing={1}>
-                                        <TextField
-                                            fullWidth
-                                            size='small'
-                                            placeholder='Type a message...'
-                                            value={messageInput}
-                                            onChange={(e) => setMessageInput(e.target.value)}
-                                            onKeyPress={(e) => {
-                                                if (e.key === 'Enter') handleSendMessage()
+                                    {selectedFile && (
+                                        <Box
+                                            sx={{
+                                                px: 2,
+                                                py: 1,
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                bgcolor: theme.palette.grey[100],
+                                                borderRadius: '8px',
+                                                mb: 1,
+                                                width: 'fit-content'
                                             }}
-                                        />
-                                        <IconButton color='primary' onClick={handleSendMessage} disabled={!messageInput.trim()}>
-                                            <IconSend />
-                                        </IconButton>
+                                        >
+                                            <Typography variant='body2' sx={{ mr: 1, fontWeight: 'bold' }}>
+                                                📎 {selectedFile.name} ({Math.round(selectedFile.size / 1024)} KB)
+                                            </Typography>
+                                            <IconButton size='small' onClick={() => setSelectedFile(null)} color='error'>
+                                                <IconX size={16} />
+                                            </IconButton>
+                                        </Box>
+                                    )}
+                                    <Stack direction='row' spacing={1} alignItems='center'>
+                                        {isRecording ? (
+                                            <>
+                                                <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, gap: 1, pl: 1 }}>
+                                                    <Box
+                                                        sx={{
+                                                            width: 10,
+                                                            height: 10,
+                                                            borderRadius: '50%',
+                                                            bgcolor: 'error.main',
+                                                            animation: 'pulse 1s infinite',
+                                                            '@keyframes pulse': {
+                                                                '0%': { opacity: 0.3 },
+                                                                '50%': { opacity: 1 },
+                                                                '100%': { opacity: 0.3 }
+                                                            }
+                                                        }}
+                                                    />
+                                                    <Typography color='error.main' sx={{ fontWeight: 'bold' }}>
+                                                        Recording: {formatDuration(recordingDuration)}
+                                                    </Typography>
+                                                </Box>
+                                                <IconButton color='error' onClick={() => stopRecording(false)} title='Discard recording'>
+                                                    <IconTrash />
+                                                </IconButton>
+                                                <IconButton color='success' onClick={() => stopRecording(true)} title='Save recording'>
+                                                    <IconPlayerStop />
+                                                </IconButton>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <input
+                                                    accept='*/*'
+                                                    style={{ display: 'none' }}
+                                                    id='whatsapp-inbox-file-input'
+                                                    type='file'
+                                                    onChange={handleFileChange}
+                                                />
+                                                <label htmlFor='whatsapp-inbox-file-input'>
+                                                    <IconButton color='secondary' component='span' title='Attach file'>
+                                                        <IconPaperclip />
+                                                    </IconButton>
+                                                </label>
+                                                <TextField
+                                                    fullWidth
+                                                    size='small'
+                                                    placeholder={selectedFile ? 'Type a caption (optional)...' : 'Type a message...'}
+                                                    value={messageInput}
+                                                    onChange={(e) => setMessageInput(e.target.value)}
+                                                    onKeyPress={(e) => {
+                                                        if (e.key === 'Enter') handleSendMessage()
+                                                    }}
+                                                />
+                                                <IconButton color='secondary' onClick={startRecording} title='Record voice message'>
+                                                    <IconMicrophone />
+                                                </IconButton>
+                                                <IconButton
+                                                    color='primary'
+                                                    onClick={handleSendMessage}
+                                                    disabled={!messageInput.trim() && !selectedFile}
+                                                >
+                                                    <IconSend />
+                                                </IconButton>
+                                            </>
+                                        )}
                                     </Stack>
                                 </Box>
                             </>

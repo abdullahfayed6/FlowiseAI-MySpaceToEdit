@@ -351,15 +351,27 @@ const MainRoutes = {
         },
         {
             path: '/whatsapp-devices',
-            element: <WhatsAppDevices />
+            element: (
+                <RequireAuth permission={'whatsapp-devices:view'}>
+                    <WhatsAppDevices />
+                </RequireAuth>
+            )
         },
         {
             path: '/whatsapp-chatbots',
-            element: <WhatsAppChatbots />
+            element: (
+                <RequireAuth permission={'whatsapp-chatbots:view'}>
+                    <WhatsAppChatbots />
+                </RequireAuth>
+            )
         },
         {
             path: '/whatsapp-inbox',
-            element: <WhatsAppInbox />
+            element: (
+                <RequireAuth permission={'whatsapp-inbox:view'}>
+                    <WhatsAppInbox />
+                </RequireAuth>
+            )
         }
     ]
 }

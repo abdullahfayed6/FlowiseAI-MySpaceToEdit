@@ -74,6 +74,7 @@ export type LoggedInUser = {
     assignedWorkspaces: IAssignedWorkspace[]
     permissions: string[]
     features?: Record<string, string>
+    allowedDevices?: string | null
     ssoRefreshToken?: string
     ssoToken?: string
     ssoProvider?: string

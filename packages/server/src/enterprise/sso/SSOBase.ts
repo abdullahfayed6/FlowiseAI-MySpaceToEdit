@@ -136,7 +136,8 @@ abstract class SSOBase {
                 ssoRefreshToken: refreshToken,
                 ssoProvider: ssoProviderName,
                 permissions: [...JSON.parse(role.permissions)],
-                features
+                features,
+                allowedDevices: user.allowedDevices
             }
             return done(null, loggedInUser as Express.User, { message: 'Logged in Successfully' })
         } catch (error) {

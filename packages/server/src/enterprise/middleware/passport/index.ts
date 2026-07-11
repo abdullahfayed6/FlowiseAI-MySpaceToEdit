@@ -185,7 +185,8 @@ export const initializeJwtCookieMiddleware = async (app: express.Application, id
                         activeWorkspace: workspaceUser.workspace.name,
                         assignedWorkspaces,
                         permissions: [...JSON.parse(role.permissions)],
-                        features
+                        features,
+                        allowedDevices: response.user.allowedDevices
                     }
                     return done(null, loggedInUser, { message: 'Logged in Successfully' })
                 } catch (error) {

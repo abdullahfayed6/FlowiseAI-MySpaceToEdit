@@ -3,16 +3,66 @@ import { v4 as uuidv4 } from 'uuid'
 import * as path from 'path'
 import * as fs from 'fs'
 import * as os from 'os'
+import { exec } from 'child_process'
+import { promisify } from 'util'
+import { downloadMediaMessage } from '@whiskeysockets/baileys'
+
+const execPromise = promisify(exec)
 import { getDataSource } from '../../DataSource'
 import { WhatsAppDevice } from '../../database/entities/WhatsAppDevice'
 import { WhatsAppChatbot } from '../../database/entities/WhatsAppChatbot'
+import { ChatMessage } from '../../database/entities/ChatMessage'
 import logger from '../../utils/logger'
 import { WhatsAppSessionManager } from '../../utils/WhatsAppSessionManager'
+
+const checkAllowedDevice = async (req: Request, deviceId: string): Promise<boolean> => {
+    const currentUser = req.user as any
+    if (currentUser && currentUser.email === 'admin@admin.com') return true
+    try {
+        const repo = getDataSource().getRepository(WhatsAppDevice)
+        const device = await repo.findOneBy({ id: deviceId })
+        if (device && device.createdBy === currentUser?.id) {
+            return true
+        }
+    } catch (e) {
+        logger.error('Error checking device owner in checkAllowedDevice:', e)
+    }
+    if (currentUser) {
+        try {
+            const allowedIds = currentUser.allowedDevices ? JSON.parse(currentUser.allowedDevices) : []
+            if (Array.isArray(allowedIds)) {
+                return allowedIds.includes(deviceId)
+            }
+        } catch (e) {
+            logger.error('Error parsing allowedDevices for user:', e)
+        }
+    }
+    return false
+}
 
 const getDevices = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const repo = getDataSource().getRepository(WhatsAppDevice)
-        const devices = await repo.find({ order: { createdDate: 'DESC' } })
+        let devices = await repo.find({ order: { createdDate: 'DESC' } })
+
+        const currentUser = req.user as any
+        logger.info(
+            `[WhatsApp] getDevices called by ${currentUser?.email || 'unknown'}. AllowedDevices: ${
+                currentUser?.allowedDevices
+            }. Total devices found in DB: ${devices.length}`
+        )
+
+        if (currentUser && currentUser.email !== 'admin@admin.com') {
+            try {
+                const allowedIds = currentUser.allowedDevices ? JSON.parse(currentUser.allowedDevices) : []
+                const allowedSet = new Set(Array.isArray(allowedIds) ? allowedIds : [])
+                devices = devices.filter((device) => {
+                    return allowedSet.has(device.id) || device.createdBy === currentUser.id
+                })
+            } catch (e) {
+                logger.error('Error filtering allowed devices:', e)
+            }
+        }
         return res.status(200).json(devices)
     } catch (error) {
         next(error)
@@ -34,6 +84,11 @@ const addDevice = async (req: Request, res: Response, next: NextFunction) => {
         device.sessionName = sessionName
         device.status = 'INITIALIZING'
 
+        const currentUser = req.user as any
+        if (currentUser) {
+            device.createdBy = currentUser.id
+        }
+
         const savedDevice = await repo.save(device)
 
         // Asynchronously initialize the WhatsApp client to generate the QR code
@@ -52,6 +107,9 @@ const addDevice = async (req: Request, res: Response, next: NextFunction) => {
 const deleteDevice = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const { id } = req.params
+        if (!(await checkAllowedDevice(req, id))) {
+            return res.status(403).json({ error: 'Access denied' })
+        }
         const repo = getDataSource().getRepository(WhatsAppDevice)
         const device = await repo.findOneBy({ id })
 
@@ -87,6 +145,9 @@ const deleteDevice = async (req: Request, res: Response, next: NextFunction) => 
 const getDeviceQR = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const { id } = req.params
+        if (!(await checkAllowedDevice(req, id))) {
+            return res.status(403).json({ error: 'Access denied' })
+        }
         const repo = getDataSource().getRepository(WhatsAppDevice)
         const device = await repo.findOneBy({ id })
 
@@ -119,6 +180,18 @@ const getChatbots = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const repo = getDataSource().getRepository(WhatsAppChatbot)
         const chatbots = await repo.find({ order: { createdDate: 'DESC' } })
+
+        const currentUser = req.user as any
+        if (currentUser && currentUser.email !== 'admin@admin.com') {
+            const filteredChatbots = []
+            for (const bot of chatbots) {
+                if (await checkAllowedDevice(req, bot.deviceId)) {
+                    filteredChatbots.push(bot)
+                }
+            }
+            return res.status(200).json(filteredChatbots)
+        }
+
         return res.status(200).json(chatbots)
     } catch (error) {
         next(error)
@@ -141,6 +214,10 @@ const addChatbot = async (req: Request, res: Response, next: NextFunction) => {
         } = req.body
         if (!title || !deviceId || !chatflowId) {
             return res.status(400).json({ error: 'Title, deviceId, and chatflowId are required' })
+        }
+
+        if (!(await checkAllowedDevice(req, deviceId))) {
+            return res.status(403).json({ error: 'Access denied' })
         }
 
         const repo = getDataSource().getRepository(WhatsAppChatbot)
@@ -188,6 +265,16 @@ const updateChatbot = async (req: Request, res: Response, next: NextFunction) =>
             return res.status(404).json({ error: 'Chatbot not found' })
         }
 
+        if (!(await checkAllowedDevice(req, chatbot.deviceId))) {
+            return res.status(403).json({ error: 'Access denied' })
+        }
+
+        if (deviceId && deviceId !== chatbot.deviceId) {
+            if (!(await checkAllowedDevice(req, deviceId))) {
+                return res.status(403).json({ error: 'Access denied' })
+            }
+        }
+
         if (typeof isActive === 'boolean') {
             chatbot.isActive = isActive
         }
@@ -219,6 +306,10 @@ const deleteChatbot = async (req: Request, res: Response, next: NextFunction) =>
             return res.status(404).json({ error: 'Chatbot not found' })
         }
 
+        if (!(await checkAllowedDevice(req, chatbot.deviceId))) {
+            return res.status(403).json({ error: 'Access denied' })
+        }
+
         await repo.delete({ id })
         return res.status(200).json({ message: 'Chatbot deleted successfully' })
     } catch (error) {
@@ -229,6 +320,9 @@ const deleteChatbot = async (req: Request, res: Response, next: NextFunction) =>
 const getChats = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const { deviceId } = req.params
+        if (!(await checkAllowedDevice(req, deviceId))) {
+            return res.status(403).json({ error: 'Access denied' })
+        }
         const store = WhatsAppSessionManager.getInstance().getStore(deviceId)
         const client = WhatsAppSessionManager.getInstance().getClient(deviceId)
         if (!store || !client) {
@@ -251,6 +345,9 @@ const getChats = async (req: Request, res: Response, next: NextFunction) => {
 const getMessages = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const { deviceId, chatId } = req.params
+        if (!(await checkAllowedDevice(req, deviceId))) {
+            return res.status(403).json({ error: 'Access denied' })
+        }
         const store = WhatsAppSessionManager.getInstance().getStore(deviceId)
         if (!store) {
             return res.status(404).json({ error: 'WhatsApp store not found' })
@@ -265,29 +362,96 @@ const getMessages = async (req: Request, res: Response, next: NextFunction) => {
 const sendMessage = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const { deviceId, chatId } = req.params
-        const { text } = req.body
+        if (!(await checkAllowedDevice(req, deviceId))) {
+            return res.status(403).json({ error: 'Access denied' })
+        }
+        const { text, file } = req.body
         const client = WhatsAppSessionManager.getInstance().getClient(deviceId)
         if (!client) {
             return res.status(404).json({ error: 'WhatsApp client not connected or not found' })
         }
 
-        // Baileys 7.x handles LID addressing + tctoken natively, so reply on the stored JID directly.
-        const sent = await client.sendMessage(chatId, { text })
+        let sent: any
+        let responseBody = text || ''
+
+        if (file && file.data) {
+            let base64Data = file.data
+            if (base64Data.includes(';base64,')) {
+                base64Data = base64Data.split(';base64,')[1]
+            }
+            const buffer = Buffer.from(base64Data, 'base64')
+            const mimeType = file.mimeType || 'application/octet-stream'
+            const fileName = file.name || 'file'
+
+            if (mimeType.startsWith('image/')) {
+                sent = await client.sendMessage(chatId, { image: buffer, caption: text || '' })
+                responseBody = text ? `📷 ${text}` : '📷 Photo'
+            } else if (mimeType.startsWith('video/')) {
+                sent = await client.sendMessage(chatId, { video: buffer, caption: text || '' })
+                responseBody = text ? `🎥 ${text}` : '🎥 Video'
+            } else if (mimeType.startsWith('audio/')) {
+                let sendBuffer: any = buffer
+                let sendMime = mimeType
+
+                try {
+                    const tempDir = path.join(process.cwd(), 'uploads', 'temp')
+                    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true })
+                    const tempInput = path.join(tempDir, `input_${uuidv4()}.webm`)
+                    const tempOutput = path.join(tempDir, `output_${uuidv4()}.ogg`)
+
+                    await fs.promises.writeFile(tempInput, buffer)
+                    await execPromise(
+                        `ffmpeg -y -i "${tempInput}" -c:a libopus -b:a 48k -ac 1 -avoid_negative_ts make_zero -f opus "${tempOutput}"`
+                    )
+
+                    if (fs.existsSync(tempOutput)) {
+                        sendBuffer = await fs.promises.readFile(tempOutput)
+                        sendMime = 'audio/ogg; codecs=opus'
+                    }
+
+                    try {
+                        if (fs.existsSync(tempInput)) await fs.promises.unlink(tempInput)
+                        if (fs.existsSync(tempOutput)) await fs.promises.unlink(tempOutput)
+                    } catch (e) {
+                        // ignore cleanup errors
+                    }
+                } catch (err: any) {
+                    logger.error(`[WhatsApp] Failed to transcode audio to Ogg Opus: ${err.message}`)
+                }
+
+                sent = await client.sendMessage(chatId, { audio: sendBuffer, mimetype: sendMime, ptt: true })
+                responseBody = '🎵 Audio message'
+            } else {
+                sent = await client.sendMessage(chatId, { document: buffer, mimetype: mimeType, fileName: fileName, caption: text || '' })
+                responseBody = `📄 Document: ${fileName}` + (text ? ` (${text})` : '')
+            }
+        } else {
+            sent = await client.sendMessage(chatId, { text })
+        }
+
         if (!sent) {
             throw new Error('Failed to send message')
         }
 
         logger.info(`[WhatsApp] Message sent to: ${chatId} (id: ${sent.key.id}, status: ${sent.status})`)
 
-        // Auto-pause AI for this chat when a human agent replies
         const store = WhatsAppSessionManager.getInstance().getStore(deviceId)
+        if (store && sent.key?.id) {
+            const jid = chatId
+            if (!store.messages.has(jid)) {
+                store.messages.set(jid, new Map())
+            }
+            store.messages.get(jid)!.set(sent.key.id, sent)
+        }
+
+        // Auto-pause AI for this chat when a human agent replies
         if (store) {
             store.pauseChat(chatId, true)
         }
 
         return res.status(200).json({
             id: sent.key.id,
-            body: text,
+            body: responseBody,
             fromMe: true,
             timestamp: sent.messageTimestamp
         })
@@ -299,6 +463,9 @@ const sendMessage = async (req: Request, res: Response, next: NextFunction) => {
 const toggleChatAI = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const { deviceId, chatId } = req.params
+        if (!(await checkAllowedDevice(req, deviceId))) {
+            return res.status(403).json({ error: 'Access denied' })
+        }
         const { isPaused } = req.body
 
         const store = WhatsAppSessionManager.getInstance().getStore(deviceId)
@@ -317,6 +484,9 @@ const toggleChatAI = async (req: Request, res: Response, next: NextFunction) => 
 const deleteChat = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const { deviceId, chatId } = req.params
+        if (!(await checkAllowedDevice(req, deviceId))) {
+            return res.status(403).json({ error: 'Access denied' })
+        }
         const client = WhatsAppSessionManager.getInstance().getClient(deviceId)
         const store = WhatsAppSessionManager.getInstance().getStore(deviceId)
         if (!client) {
@@ -328,8 +498,72 @@ const deleteChat = async (req: Request, res: Response, next: NextFunction) => {
             logger.warn(`[WhatsApp] chatModify delete failed for ${chatId}: ${e.message}`)
         }
         store?.deleteChat(chatId)
+
+        // Clear chatbot memory/history for this contact JID and its alias (PN/LID)
+        try {
+            const idsToDelete = [chatId]
+            const pn = chatId.endsWith('@s.whatsapp.net') ? chatId : store?.lidToPn.get(chatId)
+            const lid = chatId.endsWith('@lid') ? chatId : store?.pnToLid.get(chatId)
+            if (pn && !idsToDelete.includes(pn)) idsToDelete.push(pn)
+            if (lid && !idsToDelete.includes(lid)) idsToDelete.push(lid)
+
+            const chatMessageRepo = getDataSource().getRepository(ChatMessage)
+            for (const id of idsToDelete) {
+                const senderId = id.split('@')[0]
+                const dbChatId = `whatsapp_${senderId}`
+                await chatMessageRepo.delete({ chatId: dbChatId })
+            }
+            logger.info(`[WhatsApp] Pruned ChatMessage history in database for contact JIDs: ${idsToDelete.join(', ')}`)
+        } catch (dbErr: any) {
+            logger.error(`[WhatsApp] Failed to prune ChatMessage database records: ${dbErr.message}`)
+        }
+
         return res.status(200).json({ message: 'Chat deleted successfully' })
     } catch (error) {
+        next(error)
+    }
+}
+
+const downloadMessageMedia = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const { deviceId, chatId, messageId } = req.params
+        if (!(await checkAllowedDevice(req, deviceId))) {
+            return res.status(403).json({ error: 'Access denied' })
+        }
+
+        const client = WhatsAppSessionManager.getInstance().getClient(deviceId)
+        const store = WhatsAppSessionManager.getInstance().getStore(deviceId)
+        if (!client || !store) {
+            return res.status(404).json({ error: 'WhatsApp client or store not found' })
+        }
+
+        const msg = store.getRawMessage(chatId, messageId)
+        if (!msg) {
+            return res.status(404).json({ error: 'Message not found in store history' })
+        }
+
+        const messageType = Object.keys(msg.message || {})[0]
+        if (!['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage'].includes(messageType)) {
+            return res.status(400).json({ error: 'Message is not a media message' })
+        }
+
+        const mediaMessage = (msg.message as any)[messageType]
+        const mimeType = mediaMessage.mimetype || 'application/octet-stream'
+
+        const buffer = await downloadMediaMessage(
+            msg,
+            'buffer',
+            {},
+            {
+                logger: logger as any,
+                reuploadRequest: client.updateMediaMessage
+            }
+        )
+
+        res.setHeader('Content-Type', mimeType)
+        return res.send(buffer)
+    } catch (error: any) {
+        logger.error('[WhatsApp] Failed to download media:', error)
         next(error)
     }
 }
@@ -347,5 +581,6 @@ export default {
     getMessages,
     sendMessage,
     toggleChatAI,
-    deleteChat
+    deleteChat,
+    downloadMessageMedia
 }

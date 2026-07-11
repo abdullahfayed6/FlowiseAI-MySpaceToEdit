@@ -12,6 +12,11 @@ import { ChatFlow } from './database/entities/ChatFlow'
 import { getDataSource } from './DataSource'
 import { Organization } from './enterprise/database/entities/organization.entity'
 import { Workspace } from './enterprise/database/entities/workspace.entity'
+import { User, UserStatus } from './enterprise/database/entities/user.entity'
+import { OrganizationUser, OrganizationUserStatus } from './enterprise/database/entities/organization-user.entity'
+import { WorkspaceUser, WorkspaceUserStatus } from './enterprise/database/entities/workspace-user.entity'
+import { Role } from './enterprise/database/entities/role.entity'
+import { getHash } from './enterprise/utils/encryption.util'
 import { LoggedInUser } from './enterprise/Interface.Enterprise'
 import { initializeJwtCookieMiddleware, verifyToken, verifyTokenForBullMQDashboard } from './enterprise/middleware/passport'
 import { initAuthSecrets } from './enterprise/utils/authSecrets'
@@ -26,7 +31,7 @@ import { QueueManager } from './queue/QueueManager'
 import { RedisEventSubscriber } from './queue/RedisEventSubscriber'
 import flowiseApiV1Router from './routes'
 import { UsageCacheManager } from './UsageCacheManager'
-import { getEncryptionKey, getNodeModulesPackagePath } from './utils'
+import { getEncryptionKey, getNodeModulesPackagePath, generateId } from './utils'
 import { API_KEY_BLACKLIST_URLS, WHITELIST_URLS } from './utils/constants'
 import logger, { expressRequestLogger } from './utils/logger'
 import { RateLimiterManager } from './utils/rateLimit'
@@ -91,6 +96,9 @@ export class App {
 
             // Auto-create WhatsApp tables if missing
             await ensureWhatsAppTables(this.AppDataSource)
+
+            // Auto-create default admin account if not exists
+            await ensureDefaultAdminAccount(this.AppDataSource)
 
             // Initialize WhatsApp Sessions
             await WhatsAppSessionManager.getInstance().initializeAllSessions()
@@ -445,5 +453,88 @@ async function ensureWhatsAppTables(dataSource: DataSource) {
         logger.error('Error ensuring WhatsApp database tables:', e.message)
     } finally {
         await queryRunner.release()
+    }
+}
+
+async function ensureDefaultAdminAccount(dataSource: DataSource) {
+    try {
+        const userRepo = dataSource.getRepository(User)
+        const adminEmail = 'admin@admin.com'
+        const existingAdmin = await userRepo.findOneBy({ email: adminEmail })
+        if (existingAdmin) {
+            logger.info(`👤 [server]: Default admin account ${adminEmail} already exists`)
+            return
+        }
+
+        logger.info(`👤 [server]: Creating default admin account ${adminEmail}...`)
+
+        const queryRunner = dataSource.createQueryRunner()
+        await queryRunner.connect()
+        await queryRunner.startTransaction()
+
+        try {
+            // 1. Create User
+            const adminId = generateId()
+            const user = new User()
+            user.id = adminId
+            user.email = adminEmail
+            user.name = 'Admin'
+            user.credential = getHash(adminEmail)
+            user.status = UserStatus.ACTIVE
+            user.createdBy = adminId
+            user.updatedBy = adminId
+            const savedUser = await queryRunner.manager.save(User, user)
+
+            // 2. Find OWNER role
+            const ownerRole = await queryRunner.manager.findOne(Role, { where: { name: 'owner' } })
+            if (!ownerRole) {
+                throw new Error('OWNER role not found in database')
+            }
+
+            // 3. Create Organization
+            const org = new Organization()
+            org.name = 'Default Organization'
+            org.createdBy = savedUser.id
+            org.updatedBy = savedUser.id
+            const savedOrg = await queryRunner.manager.save(Organization, org)
+
+            // 4. Create OrganizationUser mapping
+            const orgUser = new OrganizationUser()
+            orgUser.organizationId = savedOrg.id
+            orgUser.userId = savedUser.id
+            orgUser.roleId = ownerRole.id
+            orgUser.createdBy = savedUser.id
+            orgUser.updatedBy = savedUser.id
+            orgUser.status = OrganizationUserStatus.ACTIVE
+            await queryRunner.manager.save(OrganizationUser, orgUser)
+
+            // 5. Create Workspace
+            const workspace = new Workspace()
+            workspace.name = 'Default Workspace'
+            workspace.organizationId = savedOrg.id
+            workspace.createdBy = savedUser.id
+            workspace.updatedBy = savedUser.id
+            const savedWorkspace = await queryRunner.manager.save(Workspace, workspace)
+
+            // 6. Create WorkspaceUser mapping
+            const workspaceUser = new WorkspaceUser()
+            workspaceUser.workspaceId = savedWorkspace.id
+            workspaceUser.userId = savedUser.id
+            workspaceUser.roleId = ownerRole.id
+            workspaceUser.createdBy = savedUser.id
+            workspaceUser.updatedBy = savedUser.id
+            workspaceUser.status = WorkspaceUserStatus.ACTIVE
+            await queryRunner.manager.save(WorkspaceUser, workspaceUser)
+
+            await queryRunner.commitTransaction()
+            logger.info('👤 [server]: Default admin account created successfully!')
+        } catch (error: any) {
+            await queryRunner.rollbackTransaction()
+            logger.error('❌ [server]: Error during creating default admin transaction:', error)
+        } finally {
+            await queryRunner.release()
+        }
+    } catch (err: any) {
+        logger.error('❌ [server]: Error ensuring default admin account:', err.message)
     }
 }

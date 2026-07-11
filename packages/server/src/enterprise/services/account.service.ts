@@ -125,60 +125,6 @@ export class AccountService {
 
         switch (platform) {
             case Platform.OPEN_SOURCE:
-                await this.ensureOneOrganizationOnly(queryRunner)
-                data.organization.name = OrganizationName.DEFAULT_ORGANIZATION
-                data.organizationUser.role = await this.roleService.readGeneralRoleByName(GeneralRole.OWNER, queryRunner)
-                data.workspace.name = WorkspaceName.DEFAULT_WORKSPACE
-                data.workspaceUser.role = data.organizationUser.role
-                data.user.status = UserStatus.ACTIVE
-                data.user = await this.userService.createNewUser(data.user, queryRunner)
-                break
-            case Platform.CLOUD: {
-                const user = await this.userService.readUserByEmail(data.user.email, queryRunner)
-                if (user && (user.status === UserStatus.ACTIVE || user.status === UserStatus.UNVERIFIED))
-                    throw new InternalFlowiseError(StatusCodes.NOT_FOUND, UserErrorMessage.USER_EMAIL_ALREADY_EXISTS)
-
-                if (!data.user.email) throw new InternalFlowiseError(StatusCodes.BAD_REQUEST, UserErrorMessage.INVALID_USER_EMAIL)
-                const { customerId, subscriptionId } = await this.identityManager.createStripeUserAndSubscribe({
-                    email: data.user.email,
-                    userPlan: UserPlan.FREE,
-                    referral: data.user.referral || ''
-                })
-                data.organization.customerId = customerId
-                data.organization.subscriptionId = subscriptionId
-
-                // if credential exists then the user is signing up with email/password
-                // if not then the user is signing up with oauth/sso
-                if (data.user.credential) {
-                    data.user.status = UserStatus.UNVERIFIED
-                    data.user.tempToken = generateTempToken()
-                    const tokenExpiry = new Date()
-                    const expiryInHours = process.env.INVITE_TOKEN_EXPIRY_IN_HOURS ? parseInt(process.env.INVITE_TOKEN_EXPIRY_IN_HOURS) : 24
-                    tokenExpiry.setHours(tokenExpiry.getHours() + expiryInHours)
-                    data.user.tokenExpiry = tokenExpiry
-                } else {
-                    data.user.status = UserStatus.ACTIVE
-                    data.user.tempToken = ''
-                    data.user.tokenExpiry = null
-                }
-                data.organization.name = OrganizationName.DEFAULT_ORGANIZATION
-                data.organizationUser.role = await this.roleService.readGeneralRoleByName(GeneralRole.OWNER, queryRunner)
-                data.workspace.name = WorkspaceName.DEFAULT_WORKSPACE
-                data.workspaceUser.role = data.organizationUser.role
-                if (!user) {
-                    data.user = await this.userService.createNewUser(data.user, queryRunner)
-                } else {
-                    if (data.user.credential) data.user.credential = this.userService.encryptUserCredential(data.user.credential)
-                    data.user.updatedBy = user.id
-                    data.user = queryRunner.manager.merge(User, user, data.user)
-                }
-                // send verification email only if user signed up with email/password
-                if (data.user.credential) {
-                    const verificationLink = getSecureTokenLink('/verify', data.user.tempToken!)
-                    await sendVerificationEmailForCloud(data.user.email!, verificationLink)
-                }
-                break
-            }
             case Platform.ENTERPRISE: {
                 if (data.user.tempToken) {
                     const user = await this.userService.readUserByToken(data.user.tempToken, queryRunner)
@@ -210,7 +156,13 @@ export class AccountService {
                     data.workspace.name = WorkspaceName.DEFAULT_PERSONAL_WORKSPACE
                     data.workspaceUser.role = await this.roleService.readGeneralRoleByName(GeneralRole.PERSONAL_WORKSPACE, queryRunner)
                 } else {
-                    await this.ensureOneOrganizationOnly(queryRunner)
+                    const userCount = await queryRunner.manager.count(User)
+                    if (userCount > 0) {
+                        throw new InternalFlowiseError(
+                            StatusCodes.FORBIDDEN,
+                            'Registration is disabled. Only the administrator can create accounts.'
+                        )
+                    }
                     data.organizationUser.role = await this.roleService.readGeneralRoleByName(GeneralRole.OWNER, queryRunner)
                     data.workspace.name = WorkspaceName.DEFAULT_WORKSPACE
                     data.workspaceUser.role = data.organizationUser.role
@@ -304,20 +256,41 @@ export class AccountService {
             if (!user) {
                 await checkUsageLimit('users', subscriptionId, getRunningExpressApp().usageCacheManager, totalOrgUsers + 1)
 
-                // generate a temporary token
-                data.user.tempToken = generateTempToken()
-                const tokenExpiry = new Date()
-                // set expiry based on env setting and fallback to 24 hours
-                const expiryInHours = process.env.INVITE_TOKEN_EXPIRY_IN_HOURS ? parseInt(process.env.INVITE_TOKEN_EXPIRY_IN_HOURS) : 24
-                tokenExpiry.setHours(tokenExpiry.getHours() + expiryInHours)
-                data.user.tokenExpiry = tokenExpiry
-                data.user.status = UserStatus.INVITED
-                // send invite
-                const registerLink =
-                    this.identityManager.getPlatformType() === Platform.ENTERPRISE
-                        ? getSecureTokenLink('/register', data.user.tempToken!)
-                        : getSecureAppUrl('/register')
-                await sendWorkspaceInvite(data.user.email!, data.workspace.name!, registerLink, this.identityManager.getPlatformType())
+                let isDirectActive = false
+                if (data.user.credential) {
+                    data.user.status = UserStatus.ACTIVE
+                    data.user.tempToken = null
+                    data.user.tokenExpiry = null
+                    isDirectActive = true
+                } else {
+                    // generate a temporary token
+                    data.user.tempToken = generateTempToken()
+                    const tokenExpiry = new Date()
+                    // set expiry based on env setting and fallback to 24 hours
+                    const expiryInHours = process.env.INVITE_TOKEN_EXPIRY_IN_HOURS ? parseInt(process.env.INVITE_TOKEN_EXPIRY_IN_HOURS) : 24
+                    tokenExpiry.setHours(tokenExpiry.getHours() + expiryInHours)
+                    data.user.tokenExpiry = tokenExpiry
+                    data.user.status = UserStatus.INVITED
+                }
+
+                // send invite only if status is INVITED (meaning no password was provided)
+                if (!isDirectActive) {
+                    const registerLink =
+                        this.identityManager.getPlatformType() === Platform.ENTERPRISE
+                            ? getSecureTokenLink('/register', data.user.tempToken!)
+                            : getSecureAppUrl('/register')
+                    try {
+                        await sendWorkspaceInvite(
+                            data.user.email!,
+                            data.workspace.name!,
+                            registerLink,
+                            this.identityManager.getPlatformType()
+                        )
+                    } catch (emailErr) {
+                        logger.error('Failed to send workspace invite email:', emailErr)
+                    }
+                }
+
                 data.user = await this.userService.createNewUser(data.user, queryRunner)
 
                 data.organizationUser.organizationId = data.workspace.organizationId
@@ -325,7 +298,8 @@ export class AccountService {
                 const roleMember = await this.roleService.readGeneralRoleByName(GeneralRole.MEMBER, queryRunner)
                 data.organizationUser.roleId = roleMember.id
                 data.organizationUser.createdBy = data.user.createdBy
-                data.organizationUser.status = OrganizationUserStatus.INVITED
+                data.organizationUser.updatedBy = data.user.createdBy
+                data.organizationUser.status = isDirectActive ? OrganizationUserStatus.ACTIVE : OrganizationUserStatus.INVITED
                 data.organizationUser = await this.organizationUserService.createNewOrganizationUser(data.organizationUser, queryRunner)
 
                 workspace.updatedBy = data.user.createdBy
@@ -334,7 +308,8 @@ export class AccountService {
                 data.workspaceUser.userId = data.user.id
                 data.workspaceUser.roleId = data.role.id
                 data.workspaceUser.createdBy = data.user.createdBy
-                data.workspaceUser.status = WorkspaceUserStatus.INVITED
+                data.workspaceUser.updatedBy = data.user.createdBy
+                data.workspaceUser.status = isDirectActive ? WorkspaceUserStatus.ACTIVE : WorkspaceUserStatus.INVITED
                 data.workspaceUser = await this.workspaceUserService.createNewWorkspaceUser(data.workspaceUser, queryRunner)
 
                 await queryRunner.startTransaction()
@@ -349,6 +324,10 @@ export class AccountService {
                 delete data.user.tokenExpiry
 
                 return data
+            }
+            if (data.user.allowedDevices !== undefined) {
+                user.allowedDevices = data.user.allowedDevices
+                await this.userService.saveUser(user, queryRunner)
             }
             const { organizationUser } = await this.organizationUserService.readOrganizationUserByOrganizationIdUserId(
                 data.workspace.organizationId,

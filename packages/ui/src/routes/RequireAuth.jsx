@@ -12,7 +12,10 @@ import { useLocation } from 'react-router-dom'
  * @param {React.ReactElement} children - Components to render if feature is enabled
  * @returns {React.ReactElement} Children or unauthorized redirect
  */
-const checkFeatureFlag = (features, display, children) => {
+const checkFeatureFlag = (features, display, children, isOpenSource) => {
+    if (isOpenSource) {
+        return children
+    }
     // Validate features object exists and is properly formatted
     if (!features || Array.isArray(features) || Object.keys(features).length === 0) {
         return <Navigate to='/unauthorized' replace />
@@ -48,28 +51,23 @@ export const RequireAuth = ({ permission, display, children }) => {
     }
 
     // Step 2: Deployment Type Specific Logic
-    // Open Source: Only show features without display property
-    if (isOpenSource) {
-        return !display ? children : <Navigate to='/unauthorized' replace />
-    }
-
-    // Cloud & Enterprise: Check both permissions and feature flags
-    if (isCloud || isEnterpriseLicensed) {
+    // Check both permissions and feature flags for all platforms
+    if (isOpenSource || isCloud || isEnterpriseLicensed) {
         // Routes with display property - check feature flags
         if (display) {
             // Check if user has any permissions
-            if (permissions.length === 0) {
+            if (permissions && permissions.length === 0) {
                 return <Navigate to='/unauthorized' replace state={{ path: location.pathname }} />
             }
 
             // Organization admins bypass permission checks
             if (isGlobal) {
-                return checkFeatureFlag(features, display, children)
+                return checkFeatureFlag(features, display, children, isOpenSource)
             }
 
             // Check user permissions and feature flags
             if (!permission || hasPermission(permission)) {
-                return checkFeatureFlag(features, display, children)
+                return checkFeatureFlag(features, display, children, isOpenSource)
             }
 
             return <Navigate to='/unauthorized' replace />

@@ -33,6 +33,7 @@ import { IconX, IconCircleCheck, IconUser } from '@tabler/icons-react'
 // API
 import accountApi from '@/api/account.api'
 import roleApi from '@/api/role'
+import whatsappApi from '@/api/whatsapp'
 import userApi from '@/api/user'
 import workspaceApi from '@/api/workspace'
 
@@ -113,11 +114,48 @@ const InviteUsersDialog = ({ show, dialogProps, onCancel, onConfirm }) => {
     const [selectedUsers, setSelectedUsers] = useState([])
     const [availableRoles, setAvailableRoles] = useState([])
     const [selectedRole, setSelectedRole] = useState('')
+    const [password, setPassword] = useState('')
+    const [newUserEmail, setNewUserEmail] = useState('')
+    const [newUserName, setNewUserName] = useState('')
     const [isSaving, setIsSaving] = useState(false)
+    const [allDevices, setAllDevices] = useState([])
+    const [selectedDevices, setSelectedDevices] = useState([])
 
     const getAllRolesApi = useApi(roleApi.getAllRolesByOrganizationId)
     const getAllWorkspacesByOrganizationIdApi = useApi(workspaceApi.getAllWorkspacesByOrganizationId)
     const getWorkspacesByUserIdApi = useApi(userApi.getWorkspacesByUserId)
+    const getAllDevicesApi = useApi(whatsappApi.getDevices)
+
+    useEffect(() => {
+        if (show) {
+            getAllDevicesApi.request()
+        }
+    }, [show])
+
+    useEffect(() => {
+        if (getAllDevicesApi.data) {
+            setAllDevices(getAllDevicesApi.data)
+
+            if (dialogProps.data && dialogProps.data.user) {
+                const userObj = dialogProps.data.user
+                if (userObj.allowedDevices) {
+                    try {
+                        const allowedIds = JSON.parse(userObj.allowedDevices)
+                        if (Array.isArray(allowedIds)) {
+                            const preselected = getAllDevicesApi.data.filter((dev) => allowedIds.includes(dev.id))
+                            setSelectedDevices(preselected)
+                        }
+                    } catch (e) {
+                        console.error('Error parsing allowedDevices:', e)
+                    }
+                } else {
+                    setSelectedDevices([])
+                }
+            } else {
+                setSelectedDevices([])
+            }
+        }
+    }, [getAllDevicesApi.data, dialogProps])
 
     useEffect(() => {
         if (getAllWorkspacesByOrganizationIdApi.data) {
@@ -194,6 +232,11 @@ const InviteUsersDialog = ({ show, dialogProps, onCancel, onConfirm }) => {
         setSearchString('')
         setUserSearchResults([])
         setSelectedUsers([])
+        setPassword('')
+        setNewUserEmail('')
+        setNewUserName('')
+        setSelectedDevices([])
+        setAllDevices([])
         fetchInitialData()
         if (dialogProps.type === 'ADD' && dialogProps.data) {
             // when clicking on add user in workspace page
@@ -282,97 +325,95 @@ const InviteUsersDialog = ({ show, dialogProps, onCancel, onConfirm }) => {
     }
 
     const saveInvite = async () => {
-        if (selectedUsers.length) {
-            const existingEmails = []
-            for (const orgUser of orgUsers) {
-                if (selectedUsers.some((user) => user.email === orgUser.user.email)) {
-                    existingEmails.push(orgUser.user.email)
-                }
+        if (dialogProps.type === 'ADD') {
+            if (!newUserEmail.trim() || !newUserName.trim() || !password.trim() || !selectedWorkspace || !selectedRole) {
+                enqueueSnackbar({ message: 'Please fill all required fields.', options: { variant: 'error' } })
+                return
             }
-            if (existingEmails.length > 0) {
+            setIsSaving(true)
+            try {
+                const saveObj = {
+                    user: {
+                        email: newUserEmail.trim(),
+                        name: newUserName.trim(),
+                        createdBy: currentUser.id,
+                        credential: password.trim(),
+                        allowedDevices: selectedDevices.length > 0 ? JSON.stringify(selectedDevices.map((d) => d.id)) : null
+                    },
+                    workspace: {
+                        id: selectedWorkspace.id
+                    },
+                    role: {
+                        id: selectedRole.id
+                    }
+                }
+                const response = await accountApi.inviteAccount(saveObj)
+                if (response.data) {
+                    enqueueSnackbar({
+                        message: 'User created successfully',
+                        options: {
+                            key: new Date().getTime() + Math.random(),
+                            variant: 'success'
+                        }
+                    })
+                    onConfirm()
+                }
+            } catch (error) {
+                console.error('Error in saveInvite:', error)
                 enqueueSnackbar({
-                    message: `The following users are already in the workspace or organization: ${existingEmails.join(', ')}`,
+                    message: `Failed to create user: ${error.response?.data?.message || error.message || 'Unknown error'}`,
                     options: {
                         key: new Date().getTime() + Math.random(),
                         variant: 'error',
-                        action: (key) => (
-                            <Button style={{ color: 'white' }} onClick={() => closeSnackbar(key)}>
-                                <IconX />
-                            </Button>
-                        )
+                        persist: true
                     }
                 })
-                return
+            } finally {
+                setIsSaving(false)
             }
+            return
         }
-        setIsSaving(true)
-        try {
-            const responses = await Promise.all(
-                selectedUsers.map(async (item) => {
-                    const saveObj = item.isNewUser
-                        ? {
-                              user: {
-                                  email: item.email,
-                                  createdBy: currentUser.id
-                              },
-                              workspace: {
-                                  id: selectedWorkspace.id
-                              },
-                              role: {
-                                  id: selectedRole.id
-                              }
-                          }
-                        : {
-                              user: {
-                                  email: item.user.email,
-                                  createdBy: currentUser.id
-                              },
-                              workspace: {
-                                  id: selectedWorkspace.id
-                              },
-                              role: {
-                                  id: selectedRole.id
-                              }
-                          }
 
-                    const response = await accountApi.inviteAccount(saveObj)
-                    return response.data
-                })
-            )
-            if (responses.length > 0) {
+        if (dialogProps.type === 'EDIT' && dialogProps.data) {
+            setIsSaving(true)
+            try {
+                const saveObj = {
+                    user: {
+                        email: dialogProps.data.user?.email || dialogProps.data.email,
+                        createdBy: currentUser.id,
+                        allowedDevices: selectedDevices.length > 0 ? JSON.stringify(selectedDevices.map((d) => d.id)) : null
+                    },
+                    workspace: {
+                        id: selectedWorkspace.id
+                    },
+                    role: {
+                        id: selectedRole.id
+                    }
+                }
+                const response = await accountApi.inviteAccount(saveObj)
+                if (response.data) {
+                    enqueueSnackbar({
+                        message: 'Invite updated successfully',
+                        options: {
+                            key: new Date().getTime() + Math.random(),
+                            variant: 'success'
+                        }
+                    })
+                    onConfirm()
+                }
+            } catch (error) {
+                console.error('Error updating invite:', error)
                 enqueueSnackbar({
-                    message: 'Users invited to workspace',
+                    message: `Failed to update invite: ${error.response?.data?.message || error.message || 'Unknown error'}`,
                     options: {
                         key: new Date().getTime() + Math.random(),
-                        variant: 'success',
-                        action: (key) => (
-                            <Button style={{ color: 'white' }} onClick={() => closeSnackbar(key)}>
-                                <IconX />
-                            </Button>
-                        )
+                        variant: 'error',
+                        persist: true
                     }
                 })
-                onConfirm() // Pass the first ID or modify as needed
-            } else {
-                throw new Error('No data received from the server')
+            } finally {
+                setIsSaving(false)
             }
-        } catch (error) {
-            console.error('Error in saveInvite:', error)
-            enqueueSnackbar({
-                message: `Failed to invite users to workspace: ${error.response?.data?.message || error.message || 'Unknown error'}`,
-                options: {
-                    key: new Date().getTime() + Math.random(),
-                    variant: 'error',
-                    persist: true,
-                    action: (key) => (
-                        <Button style={{ color: 'white' }} onClick={() => closeSnackbar(key)}>
-                            <IconX />
-                        </Button>
-                    )
-                }
-            })
-        } finally {
-            setIsSaving(false)
         }
     }
 
@@ -607,8 +648,13 @@ const InviteUsersDialog = ({ show, dialogProps, onCancel, onConfirm }) => {
     }
 
     const checkDisabled = () => {
-        if (isSaving || selectedUsers.length === 0 || !selectedWorkspace || !selectedRole) {
+        if (isSaving || !selectedWorkspace || !selectedRole) {
             return true
+        }
+        if (dialogProps.type === 'ADD') {
+            if (!newUserEmail.trim() || !newUserName.trim() || !password.trim()) {
+                return true
+            }
         }
         return false
     }
@@ -634,40 +680,63 @@ const InviteUsersDialog = ({ show, dialogProps, onCancel, onConfirm }) => {
             <DialogTitle sx={{ fontSize: '1rem' }} id='alert-dialog-title'>
                 <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center' }}>
                     <IconUser style={{ marginRight: '10px' }} />
-                    Invite Users
+                    {dialogProps.type === 'ADD' ? 'Create New User' : 'Edit User Invite'}
                 </div>
             </DialogTitle>
             <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <Box>
-                    <Typography>
-                        Select Users<span style={{ color: 'red' }}>&nbsp;*</span>
-                    </Typography>
-                    <Autocomplete
-                        multiple
-                        options={allUsers}
-                        getOptionKey={(option) => option.userId}
-                        getOptionLabel={(option) => option.email || ''}
-                        filterOptions={userSearchFilterOptions}
-                        onChange={handleChange}
-                        inputValue={searchString}
-                        onInputChange={handleInputChange}
-                        isOptionEqualToValue={(option, value) => {
-                            // Compare based on user.email for existing users or email for new users
-                            if (option.isNewUser && value.isNewUser) {
-                                return option.email === value.email
-                            } else if (!option.isNewUser && !value.isNewUser) {
-                                return option.user?.email === value.user?.email
-                            }
-                            return false
-                        }}
-                        renderInput={renderUserSearchInput}
-                        renderOption={renderUserSearchOptions}
-                        renderTags={renderSelectedUsersTags}
-                        sx={{ mt: 1 }}
-                        value={selectedUsers}
-                        PopperComponent={StyledPopper}
-                    />
-                </Box>
+                {dialogProps.type === 'ADD' ? (
+                    <>
+                        <Box>
+                            <Typography>
+                                Email Address<span style={{ color: 'red' }}>&nbsp;*</span>
+                            </Typography>
+                            <TextField
+                                fullWidth
+                                type='email'
+                                value={newUserEmail}
+                                onChange={(e) => setNewUserEmail(e.target.value)}
+                                placeholder='Enter email address'
+                                sx={{ mt: 0.5 }}
+                            />
+                        </Box>
+                        <Box>
+                            <Typography>
+                                Full Name<span style={{ color: 'red' }}>&nbsp;*</span>
+                            </Typography>
+                            <TextField
+                                fullWidth
+                                type='text'
+                                value={newUserName}
+                                onChange={(e) => setNewUserName(e.target.value)}
+                                placeholder='Enter full name'
+                                sx={{ mt: 0.5 }}
+                            />
+                        </Box>
+                        <Box>
+                            <Typography>
+                                Password<span style={{ color: 'red' }}>&nbsp;*</span>
+                            </Typography>
+                            <TextField
+                                fullWidth
+                                type='password'
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                placeholder='Enter password for direct login'
+                                sx={{ mt: 0.5 }}
+                            />
+                        </Box>
+                    </>
+                ) : (
+                    <Box>
+                        <Typography variant='subtitle1' color='textSecondary'>
+                            Editing Invite For:
+                        </Typography>
+                        <Typography variant='h5' sx={{ fontWeight: 'bold', mt: 0.5 }}>
+                            {dialogProps.data?.user?.email || dialogProps.data?.email || ''}
+                        </Typography>
+                    </Box>
+                )}
+
                 <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 2 }}>
                     <Box sx={{ gridColumn: 'span 1' }}>
                         <Typography>
@@ -699,6 +768,22 @@ const InviteUsersDialog = ({ show, dialogProps, onCancel, onConfirm }) => {
                         />
                     </Box>
                 </Box>
+                <Box sx={{ mt: 1 }}>
+                    <Typography>Allowed WhatsApp Numbers (Devices)</Typography>
+                    <Autocomplete
+                        multiple
+                        options={allDevices}
+                        getOptionLabel={(option) => option.name || ''}
+                        onChange={(event, newValue) => setSelectedDevices(newValue)}
+                        value={selectedDevices}
+                        isOptionEqualToValue={(option, value) => option.id === value.id}
+                        renderInput={(params) => (
+                            <TextField {...params} variant='outlined' placeholder='Select allowed numbers (Leave empty for all)' />
+                        )}
+                        sx={{ mt: 0.5 }}
+                        PopperComponent={StyledPopper}
+                    />
+                </Box>
             </DialogContent>
             <DialogActions sx={{ px: 3, pb: 2 }}>
                 <Button onClick={() => onCancel()} disabled={isSaving}>
@@ -710,7 +795,7 @@ const InviteUsersDialog = ({ show, dialogProps, onCancel, onConfirm }) => {
                     onClick={saveInvite}
                     startIcon={isSaving ? <CircularProgress size={20} color='inherit' /> : null}
                 >
-                    {dialogProps.confirmButtonName}
+                    {dialogProps.type === 'ADD' ? 'Create User' : dialogProps.confirmButtonName}
                 </StyledButton>
             </DialogActions>
             <ConfirmDialog />

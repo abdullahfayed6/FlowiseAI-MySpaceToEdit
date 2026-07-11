@@ -51,6 +51,8 @@ import { AddSSOColumns1730519457880 } from '../../../enterprise/database/migrati
 import { AddPersonalWorkspace1734074497540 } from '../../../enterprise/database/migrations/sqlite/1734074497540-AddPersonalWorkspace'
 import { RefactorEnterpriseDatabase1737076223692 } from '../../../enterprise/database/migrations/sqlite/1737076223692-RefactorEnterpriseDatabase'
 import { ExecutionLinkWorkspaceId1746862866554 } from '../../../enterprise/database/migrations/sqlite/1746862866554-ExecutionLinkWorkspaceId'
+import { AddUserAllowedDevices1783770000000 } from '../../../enterprise/database/migrations/sqlite/1783770000000-AddUserAllowedDevices'
+import { AddWhatsAppDeviceCreatedBy1783780000000 } from '../../../enterprise/database/migrations/sqlite/1783780000000-AddWhatsAppDeviceCreatedBy'
 
 export const sqliteMigrations = [
     Init1693835579790,
@@ -105,5 +107,7 @@ export const sqliteMigrations = [
     AddTextToSpeechToChatFlow1759419136055,
     AddChatFlowNameIndex1759424923093,
     AddApiKeyPermission1765360298674,
-    AddReasonContentToChatMessage1764759496768
+    AddReasonContentToChatMessage1764759496768,
+    AddUserAllowedDevices1783770000000,
+    AddWhatsAppDeviceCreatedBy1783780000000
 ]

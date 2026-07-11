@@ -9,19 +9,19 @@ export const useAuth = () => {
     const currentUser = useSelector((state) => state.auth.user)
 
     const hasPermission = (permissionId) => {
-        if (isOpenSource || isGlobal) {
+        if (isGlobal) {
             return true
         }
         if (!permissionId) return false
         const permissionIds = permissionId.split(',')
         if (permissions && permissions.length) {
-            return permissionIds.some((permissionId) => permissions.includes(permissionId))
+            return permissionIds.some((pId) => permissions.includes(pId))
         }
         return false
     }
 
     const hasAssignedWorkspace = (workspaceId) => {
-        if (isOpenSource || isGlobal) {
+        if (isGlobal) {
             return true
         }
         const activeWorkspaceId = currentUser?.activeWorkspaceId || ''
@@ -32,6 +32,9 @@ export const useAuth = () => {
     }
 
     const hasDisplay = (display) => {
+        if (isOpenSource) {
+            return true
+        }
         if (!display) {
             return true
         }

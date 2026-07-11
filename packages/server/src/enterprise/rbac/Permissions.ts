@@ -139,6 +139,12 @@ export class Permissions {
         const loginActivityCategory = new PermissionCategory('loginActivity')
         loginActivityCategory.addPermission(new Permission('loginActivity:view', 'View Login Activity', false, true, false))
         this.categories.push(loginActivityCategory)
+
+        const whatsappCategory = new PermissionCategory('whatsapp')
+        whatsappCategory.addPermission(new Permission('whatsapp-devices:view', 'Manage WhatsApp Devices', false, true, true))
+        whatsappCategory.addPermission(new Permission('whatsapp-chatbots:view', 'Manage WhatsApp Chatbots', false, true, true))
+        whatsappCategory.addPermission(new Permission('whatsapp-inbox:view', 'Access WhatsApp Inbox', false, true, true))
+        this.categories.push(whatsappCategory)
     }
 
     public toJSON(): { [key: string]: { key: string; value: string }[] } {

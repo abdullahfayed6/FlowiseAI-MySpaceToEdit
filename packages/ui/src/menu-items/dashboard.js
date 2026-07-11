@@ -177,7 +177,8 @@ const dashboard = {
                     type: 'item',
                     url: '/whatsapp-devices',
                     icon: icons.IconDeviceMobile,
-                    breadcrumbs: true
+                    breadcrumbs: true,
+                    permission: 'whatsapp-devices:view'
                 },
                 {
                     id: 'whatsapp-chatbots',
@@ -185,7 +186,8 @@ const dashboard = {
                     type: 'item',
                     url: '/whatsapp-chatbots',
                     icon: icons.IconMessage2Code,
-                    breadcrumbs: true
+                    breadcrumbs: true,
+                    permission: 'whatsapp-chatbots:view'
                 },
                 {
                     id: 'whatsapp-inbox',
@@ -193,44 +195,8 @@ const dashboard = {
                     type: 'item',
                     url: '/whatsapp-inbox',
                     icon: icons.IconBrandWhatsapp,
-                    breadcrumbs: true
-                }
-            ]
-        },
-        {
-            id: 'evaluations',
-            title: 'Evaluations',
-            type: 'group',
-            children: [
-                {
-                    id: 'datasets',
-                    title: 'Datasets',
-                    type: 'item',
-                    url: '/datasets',
-                    icon: icons.IconDatabase,
                     breadcrumbs: true,
-                    display: 'feat:datasets',
-                    permission: 'datasets:view'
-                },
-                {
-                    id: 'evaluators',
-                    title: 'Evaluators',
-                    type: 'item',
-                    url: '/evaluators',
-                    icon: icons.IconTestPipe,
-                    breadcrumbs: true,
-                    display: 'feat:evaluators',
-                    permission: 'evaluators:view'
-                },
-                {
-                    id: 'evaluations',
-                    title: 'Evaluations',
-                    type: 'item',
-                    url: '/evaluations',
-                    icon: icons.IconChartHistogram,
-                    breadcrumbs: true,
-                    display: 'feat:evaluations',
-                    permission: 'evaluations:view'
+                    permission: 'whatsapp-inbox:view'
                 }
             ]
         },
@@ -239,16 +205,6 @@ const dashboard = {
             title: 'User & Workspace Management',
             type: 'group',
             children: [
-                {
-                    id: 'sso',
-                    title: 'SSO Config',
-                    type: 'item',
-                    url: '/sso-config',
-                    icon: icons.IconShieldLock,
-                    breadcrumbs: true,
-                    display: 'feat:sso-config',
-                    permission: 'sso:manage'
-                },
                 {
                     id: 'roles',
                     title: 'Roles',
@@ -278,16 +234,6 @@ const dashboard = {
                     breadcrumbs: true,
                     display: 'feat:workspaces',
                     permission: 'workspace:view'
-                },
-                {
-                    id: 'login-activity',
-                    title: 'Login Activity',
-                    type: 'item',
-                    url: '/login-activity',
-                    icon: icons.IconClipboardList,
-                    breadcrumbs: true,
-                    display: 'feat:login-activity',
-                    permission: 'loginActivity:view'
                 }
             ]
         },
