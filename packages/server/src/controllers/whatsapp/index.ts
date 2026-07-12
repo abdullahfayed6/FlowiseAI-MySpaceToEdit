@@ -353,6 +353,8 @@ const getMessages = async (req: Request, res: Response, next: NextFunction) => {
             return res.status(404).json({ error: 'WhatsApp store not found' })
         }
 
+        store.markChatAsRead(chatId)
+
         return res.status(200).json(store.listMessages(chatId))
     } catch (error) {
         next(error)

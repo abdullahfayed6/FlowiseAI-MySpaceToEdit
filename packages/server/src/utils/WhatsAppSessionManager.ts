@@ -458,6 +458,31 @@ export class SimpleStore {
         this.save()
     }
 
+    markChatAsRead(chatId: string) {
+        const keys = [chatId]
+        const chat = this.chats.get(chatId)
+        if (chat?.pnJid) keys.push(chat.pnJid)
+        if (chatId.endsWith('@lid')) {
+            const pn = this.lidToPn.get(chatId)
+            if (pn && !keys.includes(pn)) keys.push(pn)
+        } else if (chatId.endsWith('@s.whatsapp.net')) {
+            const lid = this.pnToLid.get(chatId)
+            if (lid && !keys.includes(lid)) keys.push(lid)
+        }
+
+        let changed = false
+        for (const key of keys) {
+            const record = this.chats.get(key)
+            if (record && record.unreadCount > 0) {
+                record.unreadCount = 0
+                changed = true
+            }
+        }
+        if (changed) {
+            this.save()
+        }
+    }
+
     save() {
         try {
             const dir = path.dirname(this.filePath)

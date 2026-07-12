@@ -396,7 +396,10 @@ const WhatsAppInbox = () => {
                                     <ListItemButton
                                         key={chat.id}
                                         selected={selectedChat?.id === chat.id}
-                                        onClick={() => setSelectedChat(chat)}
+                                        onClick={() => {
+                                            setSelectedChat({ ...chat, unreadCount: 0 })
+                                            setChats((prev) => prev.map((c) => (c.id === chat.id ? { ...c, unreadCount: 0 } : c)))
+                                        }}
                                         sx={{ borderBottom: 1, borderColor: 'divider' }}
                                     >
                                         <ListItemText
