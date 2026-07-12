@@ -1119,8 +1119,18 @@ export class WhatsAppSessionManager {
             const delayMinutes = chatbot.followUpDelayMinutes || 1440
             const systemPrompt = chatbot.followUpSystemPrompt || ''
 
+            const processedJids = new Set<string>()
             for (const [chatId, chatRecord] of store.chats.entries()) {
                 if (chatRecord.isPaused) continue
+
+                // Deduplicate LID vs Phone Number JIDs representing the same contact
+                let unifiedJid = chatId
+                if (chatId.endsWith('@lid')) {
+                    const pn = store.lidToPn.get(chatId)
+                    if (pn) unifiedJid = pn
+                }
+                if (processedJids.has(unifiedJid)) continue
+                processedJids.add(unifiedJid)
 
                 const messages = store.listMessages(chatId)
                 if (messages.length === 0) continue

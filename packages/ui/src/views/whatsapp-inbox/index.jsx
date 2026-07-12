@@ -233,7 +233,7 @@ const WhatsAppInbox = () => {
         try {
             const res = await whatsappApi.getMessages(selectedDeviceId, selectedChat.id)
             if (res && res.data) {
-                setMessages(res.data.sort((a, b) => a.timestamp - b.timestamp))
+                setMessages(res.data)
             }
         } catch (error) {
             console.error('Error fetching messages', error)
