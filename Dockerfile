@@ -16,7 +16,8 @@ RUN apk update && \
         build-base \
         cairo-dev \
         pango-dev \
-        curl && \
+        curl \
+        ffmpeg && \
     npm install -g pnpm
 
 ENV NODE_OPTIONS=--max-old-space-size=8192
