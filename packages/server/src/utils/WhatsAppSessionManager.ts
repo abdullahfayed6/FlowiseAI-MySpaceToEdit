@@ -92,6 +92,7 @@ export class SimpleStore {
     private filePath: string
     // Unix timestamp (seconds): only show chats/messages that arrived after this time
     public connectedAt: number = 0
+    private messageSeq: number = 0
 
     constructor(filePath: string) {
         this.filePath = filePath
@@ -203,9 +204,14 @@ export class SimpleStore {
             msg.messageTimestamp = ts
         }
 
+        if (!msg._seq) {
+            this.messageSeq++
+            msg._seq = this.messageSeq
+        }
+
         // Merge so a later status/content update doesn't wipe the body
         const prev = bucket.get(id)
-        bucket.set(id, prev ? { ...prev, ...msg, message: msg.message || prev.message } : msg)
+        bucket.set(id, prev ? { ...prev, ...msg, message: msg.message || prev.message, _seq: msg._seq || prev._seq } : msg)
 
         this.upsertChat(jid, { conversationTimestamp: ts })
     }
@@ -402,11 +408,17 @@ export class SimpleStore {
                     id,
                     body: extractBody(msg),
                     fromMe: msg.key?.fromMe || false,
-                    timestamp: ts
+                    timestamp: ts,
+                    _seq: msg._seq || 0
                 })
             }
         }
-        return out.sort((a, b) => a.timestamp - b.timestamp)
+        return out.sort((a, b) => {
+            if (a.timestamp !== b.timestamp) {
+                return a.timestamp - b.timestamp
+            }
+            return a._seq - b._seq
+        })
     }
 
     getRawMessage(chatId: string, messageId: string): any {
@@ -473,6 +485,31 @@ export class SimpleStore {
                 this.pnToLid.set(pn, lid)
             }
             if (data.connectedAt) this.connectedAt = data.connectedAt
+
+            // Reconstruct and assign message sequence numbers for chronological stability
+            let maxSeq = 0
+            for (const bucket of this.messages.values()) {
+                for (const msg of bucket.values()) {
+                    if (msg._seq) {
+                        maxSeq = Math.max(maxSeq, msg._seq)
+                    }
+                }
+            }
+            for (const bucket of this.messages.values()) {
+                const sortedMsgs = Array.from(bucket.values()).sort((a, b) => {
+                    const tsA = coerceTimestamp(a.messageTimestamp)
+                    const tsB = coerceTimestamp(b.messageTimestamp)
+                    return tsA - tsB
+                })
+                for (const msg of sortedMsgs) {
+                    if (!msg._seq) {
+                        maxSeq++
+                        msg._seq = maxSeq
+                    }
+                }
+            }
+            this.messageSeq = maxSeq
+
             logger.info(
                 `[WhatsApp] Loaded store: ${this.chats.size} chats, ${this.messages.size} conversations, connectedAt: ${this.connectedAt}`
             )
