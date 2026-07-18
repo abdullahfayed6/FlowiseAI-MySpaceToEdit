@@ -124,12 +124,22 @@ const deleteDevice = async (req: Request, res: Response, next: NextFunction) => 
         await WhatsAppSessionManager.getInstance().closeSession(id)
 
         // Delete the session data folder on disk
-        const sessionPath = path.join(os.homedir(), '.flowise', 'whatsapp_sessions', `session-${device.sessionName}`)
-        if (fs.existsSync(sessionPath)) {
+        const sessionsDir = path.join(os.homedir(), '.flowise', 'whatsapp_sessions')
+        const authPath = path.join(sessionsDir, `auth-${device.sessionName}`)
+        const storePath = path.join(sessionsDir, `store-${device.sessionName}.json`)
+
+        if (fs.existsSync(authPath)) {
             try {
-                fs.rmSync(sessionPath, { recursive: true, force: true })
+                fs.rmSync(authPath, { recursive: true, force: true })
             } catch (err) {
-                console.error(`Failed to delete session directory:`, err)
+                console.error(`Failed to delete auth directory:`, err)
+            }
+        }
+        if (fs.existsSync(storePath)) {
+            try {
+                fs.rmSync(storePath, { force: true })
+            } catch (err) {
+                console.error(`Failed to delete store file:`, err)
             }
         }
 

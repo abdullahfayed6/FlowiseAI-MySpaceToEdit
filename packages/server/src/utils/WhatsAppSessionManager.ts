@@ -93,6 +93,7 @@ export class SimpleStore {
     // Unix timestamp (seconds): only show chats/messages that arrived after this time
     public connectedAt: number = 0
     private messageSeq: number = 0
+    private saveTimeout: NodeJS.Timeout | null = null
 
     constructor(filePath: string) {
         this.filePath = filePath
@@ -483,20 +484,47 @@ export class SimpleStore {
         }
     }
 
-    save() {
-        try {
-            const dir = path.dirname(this.filePath)
-            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-            const data = {
-                chats: Array.from(this.chats.entries()),
-                messages: Array.from(this.messages.entries()).map(([jid, bucket]) => [jid, Array.from(bucket.entries())]),
-                lidToPn: Array.from(this.lidToPn.entries()),
-                connectedAt: this.connectedAt
+    save(forceSync: boolean = false) {
+        if (forceSync) {
+            if (this.saveTimeout) {
+                clearTimeout(this.saveTimeout)
+                this.saveTimeout = null
             }
-            fs.writeFileSync(this.filePath, JSON.stringify(data), 'utf8')
-        } catch (e: any) {
-            logger.warn(`[WhatsApp] Failed to save store: ${e.message}`)
+            try {
+                const dir = path.dirname(this.filePath)
+                if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+                const data = {
+                    chats: Array.from(this.chats.entries()),
+                    messages: Array.from(this.messages.entries()).map(([jid, bucket]) => [jid, Array.from(bucket.entries())]),
+                    lidToPn: Array.from(this.lidToPn.entries()),
+                    connectedAt: this.connectedAt
+                }
+                fs.writeFileSync(this.filePath, JSON.stringify(data), 'utf8')
+            } catch (e: any) {
+                logger.warn(`[WhatsApp] Failed to force save store: ${e.message}`)
+            }
+            return
         }
+
+        if (this.saveTimeout) return
+        this.saveTimeout = setTimeout(() => {
+            this.saveTimeout = null
+            try {
+                const dir = path.dirname(this.filePath)
+                if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+                const data = {
+                    chats: Array.from(this.chats.entries()),
+                    messages: Array.from(this.messages.entries()).map(([jid, bucket]) => [jid, Array.from(bucket.entries())]),
+                    lidToPn: Array.from(this.lidToPn.entries()),
+                    connectedAt: this.connectedAt
+                }
+                fs.writeFile(this.filePath, JSON.stringify(data), 'utf8', (err) => {
+                    if (err) logger.warn(`[WhatsApp] Failed to save store asynchronously: ${err.message}`)
+                })
+            } catch (e: any) {
+                logger.warn(`[WhatsApp] Failed to save store: ${e.message}`)
+            }
+        }, 1000)
     }
 
     load() {
@@ -550,6 +578,7 @@ export class WhatsAppSessionManager {
     private stores: Map<string, SimpleStore> = new Map()
     private sessionNames: Map<string, string> = new Map()
     private initializing: Set<string> = new Set()
+    private explicitlyClosed: Set<string> = new Set()
     private followUpTimer: NodeJS.Timeout | null = null
 
     // Anti-ban: Rate limiting
@@ -571,7 +600,7 @@ export class WhatsAppSessionManager {
             logger.info('[WhatsApp] Process exiting. Saving all active session stores...')
             for (const store of this.stores.values()) {
                 try {
-                    store.save()
+                    store.save(true)
                 } catch (e) {
                     // ignore
                 }
@@ -868,9 +897,12 @@ export class WhatsAppSessionManager {
                 logger.warn(`[WhatsApp Device ${device.name}] Connection closed. Reason: ${errorDetail}, reconnecting: ${shouldReconnect}`)
 
                 clearInterval(storeInterval)
-                store.save()
+                store.save(true)
 
-                if (shouldReconnect) {
+                const isExplicitlyClosed = this.explicitlyClosed.has(deviceId)
+                this.explicitlyClosed.delete(deviceId)
+
+                if (shouldReconnect && !isExplicitlyClosed) {
                     this.initializing.delete(deviceId)
                     this.clients.delete(deviceId)
                     this.stores.delete(deviceId)
@@ -1076,6 +1108,7 @@ export class WhatsAppSessionManager {
     }
 
     public async closeSession(deviceId: string): Promise<void> {
+        this.explicitlyClosed.add(deviceId)
         const client = this.clients.get(deviceId)
         const store = this.stores.get(deviceId)
 
@@ -1090,7 +1123,7 @@ export class WhatsAppSessionManager {
 
         if (store) {
             try {
-                store.save()
+                store.save(true)
             } catch (e) {
                 // ignore
             }
