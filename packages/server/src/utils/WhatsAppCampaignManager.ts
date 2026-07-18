@@ -10,6 +10,7 @@ export class WhatsAppCampaignManager {
     private static instance: WhatsAppCampaignManager
     private isRunning = false
     private campaignDevicePointers: Map<string, number> = new Map()
+    private campaignNextSendTimes: Map<string, number> = new Map()
 
     private constructor() {
         this.startQueueLoop()
@@ -60,6 +61,12 @@ export class WhatsAppCampaignManager {
                 }
 
                 for (const campaign of runningCampaigns) {
+                    // Check if campaign is in cooldown (non-blocking scheduler)
+                    const nextSendTime = this.campaignNextSendTimes.get(campaign.id) || 0
+                    if (Date.now() < nextSendTime) {
+                        continue
+                    }
+
                     // 2. Check Allowed hours window
                     if (campaign.sendingAllowedHoursStart && campaign.sendingAllowedHoursEnd) {
                         const currentHourMin = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
@@ -276,9 +283,9 @@ export class WhatsAppCampaignManager {
             await campaignRepo.save(campaign)
         }
 
-        // Apply campaign delay (baseDelay + random jitter)
+        // Set next send time (baseDelay + random jitter)
         const delaySeconds = campaign.baseDelay + Math.floor(Math.random() * campaign.jitter)
-        logger.info(`[WhatsApp Campaign] Sleep for ${delaySeconds} seconds before sending next message...`)
-        await new Promise((resolve) => setTimeout(resolve, delaySeconds * 1000))
+        logger.info(`[WhatsApp Campaign] Setting next send time for "${campaign.name}" in ${delaySeconds} seconds`)
+        this.campaignNextSendTimes.set(campaign.id, Date.now() + delaySeconds * 1000)
     }
 }

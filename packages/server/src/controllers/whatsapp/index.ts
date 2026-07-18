@@ -927,13 +927,13 @@ const restSendMessage = async (req: Request, res: Response, _next: NextFunction)
         }
 
         const cleanFrom = String(req.body.from ?? req.query.from ?? '').replace(/\D/g, '')
-        const cleanTo = String(req.body.to ?? req.query.to ?? '').replace(/\D/g, '')
+        let rawTo = String(req.body.to ?? req.query.to ?? '').trim()
         const messageType = String(req.body.messageType ?? req.query.messageType ?? 'text')
 
         if (!cleanFrom) {
             return res.status(400).json({ success: false, message: 'Sender number (from) is required' })
         }
-        if (!cleanTo) {
+        if (!rawTo) {
             return res.status(400).json({ success: false, message: 'Recipient number (to) is required' })
         }
 
@@ -948,7 +948,12 @@ const restSendMessage = async (req: Request, res: Response, _next: NextFunction)
             return res.status(400).json({ success: false, message: 'WhatsApp device is not connected' })
         }
 
-        const jid = `${cleanTo}@s.whatsapp.net`
+        let jid = rawTo
+        if (!jid.endsWith('@s.whatsapp.net') && !jid.endsWith('@g.us')) {
+            const cleanTo = jid.replace(/\D/g, '')
+            jid = `${cleanTo}@s.whatsapp.net`
+        }
+
         let baileysMessage: any = null
 
         if (messageType === 'text') {
@@ -997,7 +1002,7 @@ const restSendMessage = async (req: Request, res: Response, _next: NextFunction)
             data: {
                 messageId,
                 timestamp,
-                recipient: cleanTo,
+                recipient: rawTo,
                 messageType,
                 contentPreview: messageType === 'text' ? (baileysMessage.text as string).substring(0, 50) : `${messageType} message`
             }
