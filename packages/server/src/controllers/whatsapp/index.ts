@@ -833,6 +833,15 @@ const getGroupParticipants = async (req: Request, res: Response, next: NextFunct
         for (const p of groupMeta.participants) {
             const rawJid = p.id
             if (rawJid.endsWith('@lid')) {
+                // Check if Baileys already populated the phoneNumber/pnJid property directly in the participant details
+                const anyP = p as any
+                const directPn = anyP.phoneNumber || anyP.pnJid || anyP.jid
+                if (directPn && typeof directPn === 'string' && directPn.endsWith('@s.whatsapp.net')) {
+                    participantMappings.set(rawJid, directPn)
+                    store?.recordLidMapping?.(rawJid, directPn)
+                    continue
+                }
+
                 const cachedPn = store?.lidToPn?.get(rawJid)
                 if (cachedPn) {
                     participantMappings.set(rawJid, cachedPn)

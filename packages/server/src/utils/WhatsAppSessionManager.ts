@@ -939,6 +939,47 @@ export class WhatsAppSessionManager {
 
         sock.ev.on('creds.update', saveCreds)
 
+        // Capture background contact and history updates to sync LID to Phone mappings
+        sock.ev.on('contacts.upsert', (contacts) => {
+            let changed = false
+            for (const contact of contacts) {
+                if (contact.id && contact.id.endsWith('@lid') && contact.phoneNumber && contact.phoneNumber.endsWith('@s.whatsapp.net')) {
+                    store.recordLidMapping(contact.id, contact.phoneNumber)
+                    changed = true
+                }
+            }
+            if (changed) store.save()
+        })
+
+        sock.ev.on('contacts.update', (updates) => {
+            let changed = false
+            for (const update of updates) {
+                if (update.id && update.id.endsWith('@lid') && update.phoneNumber && update.phoneNumber.endsWith('@s.whatsapp.net')) {
+                    store.recordLidMapping(update.id, update.phoneNumber)
+                    changed = true
+                }
+            }
+            if (changed) store.save()
+        })
+
+        sock.ev.on('messaging-history.set', ({ contacts }) => {
+            if (contacts && Array.isArray(contacts)) {
+                let changed = false
+                for (const contact of contacts) {
+                    if (
+                        contact.id &&
+                        contact.id.endsWith('@lid') &&
+                        contact.phoneNumber &&
+                        contact.phoneNumber.endsWith('@s.whatsapp.net')
+                    ) {
+                        store.recordLidMapping(contact.id, contact.phoneNumber)
+                        changed = true
+                    }
+                }
+                if (changed) store.save()
+            }
+        })
+
         // Delivery-status tracking. status: 1=PENDING 2=SERVER_ACK 3=DELIVERY_ACK 4=READ.
         sock.ev.on('messages.update', (updates) => {
             for (const u of updates) {
