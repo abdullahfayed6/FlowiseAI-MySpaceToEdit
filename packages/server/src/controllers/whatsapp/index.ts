@@ -827,34 +827,68 @@ const getGroupParticipants = async (req: Request, res: Response, next: NextFunct
 
         const store = WhatsAppSessionManager.getInstance().getStore(deviceId)
 
-        const participants = await Promise.all(
-            groupMeta.participants.map(async (p: any) => {
-                let realJid = p.id
-                if (p.id.endsWith('@lid')) {
-                    const mappedPn = store?.lidToPn?.get(p.id)
-                    if (mappedPn) {
-                        realJid = mappedPn
-                    } else {
-                        try {
-                            const resolvedPn = await (client as any).signalRepository?.lidMapping?.getPNForLID?.(p.id)
-                            if (resolvedPn && typeof resolvedPn === 'string' && resolvedPn.endsWith('@s.whatsapp.net')) {
-                                realJid = resolvedPn
-                                store?.recordLidMapping?.(p.id, resolvedPn)
-                                store?.save?.()
-                            }
-                        } catch (err) {
-                            // ignore resolve errors
+        const unresolvedLids: string[] = []
+        const participantMappings = new Map<string, string>()
+
+        for (const p of groupMeta.participants) {
+            const rawJid = p.id
+            if (rawJid.endsWith('@lid')) {
+                const cachedPn = store?.lidToPn?.get(rawJid)
+                if (cachedPn) {
+                    participantMappings.set(rawJid, cachedPn)
+                } else {
+                    try {
+                        const localPn = await (client as any).signalRepository?.lidMapping?.getPNForLID?.(rawJid)
+                        if (localPn && typeof localPn === 'string' && localPn.endsWith('@s.whatsapp.net')) {
+                            participantMappings.set(rawJid, localPn)
+                            store?.recordLidMapping?.(rawJid, localPn)
+                        } else {
+                            unresolvedLids.push(rawJid)
                         }
+                    } catch (err) {
+                        unresolvedLids.push(rawJid)
                     }
                 }
-                const phoneNumber = realJid.split('@')[0]
-                return {
-                    jid: realJid,
-                    phoneNumber,
-                    role: p.admin ? (p.admin === 'superadmin' ? 'Super Admin' : 'Admin') : 'Member'
-                }
-            })
-        )
+            } else {
+                participantMappings.set(rawJid, rawJid)
+            }
+        }
+
+        if (unresolvedLids.length > 0) {
+            const chunkSize = 5
+            for (let i = 0; i < unresolvedLids.length; i += chunkSize) {
+                const chunk = unresolvedLids.slice(i, i + chunkSize)
+                await Promise.all(
+                    chunk.map(async (lid) => {
+                        try {
+                            const results = await client.onWhatsApp(lid)
+                            if (results && results.length > 0 && results[0].exists && results[0].jid) {
+                                const phoneJid = results[0].jid
+                                if (phoneJid.endsWith('@s.whatsapp.net')) {
+                                    participantMappings.set(lid, phoneJid)
+                                    store?.recordLidMapping?.(lid, phoneJid)
+                                }
+                            }
+                        } catch (e) {
+                            // ignore individual lookup failures
+                        }
+                    })
+                )
+                // Small sleep between batches to avoid WhatsApp rate limits
+                await new Promise((resolve) => setTimeout(resolve, 100))
+            }
+            store?.save?.(true)
+        }
+
+        const participants = groupMeta.participants.map((p: any) => {
+            const resolvedJid = participantMappings.get(p.id) || p.id
+            const phoneNumber = resolvedJid.split('@')[0]
+            return {
+                jid: resolvedJid,
+                phoneNumber,
+                role: p.admin ? (p.admin === 'superadmin' ? 'Super Admin' : 'Admin') : 'Member'
+            }
+        })
 
         return res.status(200).json({
             id: groupMeta.id,
