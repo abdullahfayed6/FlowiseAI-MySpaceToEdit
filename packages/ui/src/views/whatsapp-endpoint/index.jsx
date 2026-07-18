@@ -35,10 +35,15 @@ import { IconCopy, IconCheck, IconPlus, IconTrash } from '@tabler/icons-react'
 // project imports
 import ViewHeader from '@/layout/MainLayout/ViewHeader'
 import apiKeyApi from '@/api/apikey'
+import whatsappApi from '@/api/whatsapp'
 import useApi from '@/hooks/useApi'
 
 const WhatsAppEndpoint = () => {
     const theme = useTheme()
+
+    // Connected devices states
+    const [devices, setDevices] = useState([])
+    const [devicesLoading, setDevicesLoading] = useState(true)
 
     // API Key states
     const [apiKeys, setApiKeys] = useState([])
@@ -56,7 +61,7 @@ const WhatsAppEndpoint = () => {
 
     // Form inputs for live preview
     const [messageType, setMessageType] = useState('text')
-    const [fromPhone, setFromPhone] = useState('201012345678')
+    const [fromPhone, setFromPhone] = useState('')
     const [toPhone, setToPhone] = useState('201098765432')
     const [textMsg, setTextMsg] = useState('Hello from the WhatsApp API!')
     const [mediaUrl, setMediaUrl] = useState('https://example.com/file.pdf')
@@ -74,8 +79,28 @@ const WhatsAppEndpoint = () => {
         getAllAPIKeysApi.request()
     }
 
+    const fetchDevices = async () => {
+        try {
+            setDevicesLoading(true)
+            const res = await whatsappApi.getDevices()
+            if (res && res.data) {
+                // Filter only connected devices
+                const connected = res.data.filter((d) => d.status === 'CONNECTED')
+                setDevices(connected)
+                if (connected.length > 0) {
+                    setFromPhone(connected[0].phoneNumber)
+                }
+            }
+        } catch (e) {
+            console.error('Error fetching WhatsApp devices:', e)
+        } finally {
+            setDevicesLoading(false)
+        }
+    }
+
     useEffect(() => {
         fetchKeys()
+        fetchDevices()
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
@@ -115,9 +140,10 @@ const WhatsAppEndpoint = () => {
         if (!newTokenLabel.trim()) return
         setIsCreatingKey(true)
         try {
+            // Note: permissions must not be empty otherwise server returns 412. We pass 'apikeys:view' as default.
             const res = await apiKeyApi.createNewAPI({
                 keyName: newTokenLabel,
-                permissions: []
+                permissions: ['apikeys:view']
             })
             if (res.data) {
                 setNewlyCreatedKey(res.data.apiKey)
@@ -162,7 +188,7 @@ const WhatsAppEndpoint = () => {
     const getRequestBody = () => {
         const body = {
             messageType,
-            from: fromPhone,
+            from: fromPhone || '201012345678',
             to: toPhone
         }
         if (messageType === 'text') {
@@ -236,7 +262,7 @@ print(response.json())`
                     onClick={() => setNewTokenDialogOpen(true)}
                     sx={{ borderRadius: 2 }}
                 >
-                    Generate New Token (إنشاء توكين جديد)
+                    Generate New Token
                 </Button>
             </Stack>
 
@@ -246,7 +272,7 @@ print(response.json())`
                     <Card variant='outlined' sx={{ borderRadius: 3, border: '1px solid', borderColor: theme.palette.grey[900] + 15 }}>
                         <CardContent>
                             <Typography variant='h5' sx={{ mb: 2, fontWeight: 'bold' }}>
-                                ⚙️ Request Configurator
+                                Request Configurator
                             </Typography>
 
                             <Stack spacing={2.5}>
@@ -282,14 +308,29 @@ print(response.json())`
                                     </Stack>
                                 )}
 
-                                <TextField
-                                    fullWidth
-                                    label='Sender Phone Number (from)'
-                                    value={fromPhone}
-                                    onChange={(e) => setFromPhone(e.target.value)}
-                                    placeholder='e.g. 201012345678'
-                                    helperText='Sender number with country code (connected in WA Devices)'
-                                />
+                                {/* Connected Devices Selector for From parameter */}
+                                {devicesLoading ? (
+                                    <CircularProgress size={20} />
+                                ) : devices.length === 0 ? (
+                                    <Alert severity='error' sx={{ borderRadius: 2 }}>
+                                        No connected WhatsApp devices found. Please connect a device in the WhatsApp Devices section first.
+                                    </Alert>
+                                ) : (
+                                    <TextField
+                                        select
+                                        fullWidth
+                                        label='Sender Phone Number (from)'
+                                        value={fromPhone}
+                                        onChange={(e) => setFromPhone(e.target.value)}
+                                        helperText='Select one of your connected WhatsApp devices'
+                                    >
+                                        {devices.map((dev) => (
+                                            <MenuItem key={dev.id} value={dev.phoneNumber}>
+                                                {dev.name} ({dev.phoneNumber})
+                                            </MenuItem>
+                                        ))}
+                                    </TextField>
+                                )}
 
                                 <TextField
                                     fullWidth
@@ -297,7 +338,7 @@ print(response.json())`
                                     value={toPhone}
                                     onChange={(e) => setToPhone(e.target.value)}
                                     placeholder='e.g. 201098765432'
-                                    helperText='Recipient phone (or WhatsApp group JID ending with @g.us)'
+                                    helperText='Recipient phone with country code (or WhatsApp group JID)'
                                 />
 
                                 <TextField
@@ -403,7 +444,7 @@ print(response.json())`
                     >
                         <CardContent>
                             <Typography variant='h5' sx={{ mb: 1, fontWeight: 'bold' }}>
-                                🔗 API Endpoint Details
+                                API Endpoint Details
                             </Typography>
 
                             <Paper
@@ -432,7 +473,7 @@ print(response.json())`
                             </Paper>
 
                             <Typography variant='h5' sx={{ mb: 2, fontWeight: 'bold' }}>
-                                💻 Code Example (أمثلة برمجية للاستدعاء)
+                                Code Example (أمثلة برمجية للاستدعاء)
                             </Typography>
 
                             <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 1.5 }}>
@@ -481,7 +522,7 @@ print(response.json())`
 
                     {/* Parameters Documentation Table */}
                     <Typography variant='h4' sx={{ mb: 1.5, fontWeight: 'bold' }}>
-                        📋 API Parameters Table
+                        API Parameters Table
                     </Typography>
 
                     <TableContainer component={Paper} variant='outlined' sx={{ borderRadius: 3 }}>
@@ -576,11 +617,10 @@ print(response.json())`
 
             {/* Dialog to display and copy raw new token */}
             <Dialog open={showCopyDialog} onClose={() => setShowCopyDialog(false)} fullWidth maxWidth='sm'>
-                <DialogTitle sx={{ fontWeight: 'bold' }}>Token Created Successfully 🎉</DialogTitle>
+                <DialogTitle sx={{ fontWeight: 'bold' }}>Token Created Successfully</DialogTitle>
                 <DialogContent>
                     <Alert severity='warning' sx={{ mb: 2, borderRadius: 2 }}>
-                        Please copy your token now. For security reasons, <b>you will not be able to see it again</b> after closing this
-                        window.
+                        Please copy your token now. For security reasons, you will not be able to see it again after closing this window.
                     </Alert>
                     <Paper
                         variant='outlined'
