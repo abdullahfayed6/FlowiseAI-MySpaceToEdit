@@ -27,5 +27,13 @@ export default {
     toggleChatAI: (deviceId, chatId, isPaused) => client.post(`/whatsapp/devices/${deviceId}/chats/${chatId}/toggle-ai`, { isPaused }),
     deleteChat: (deviceId, chatId) => client.delete(`/whatsapp/devices/${deviceId}/chats/${chatId}`),
     getMessageMedia: (deviceId, chatId, messageId) =>
-        client.get(`/whatsapp/devices/${deviceId}/chats/${chatId}/messages/${messageId}/media`, { responseType: 'blob' })
+        client.get(`/whatsapp/devices/${deviceId}/chats/${chatId}/messages/${messageId}/media`, { responseType: 'blob' }),
+
+    // Campaigns
+    getCampaigns: () => client.get('/whatsapp/campaigns'),
+    createCampaign: (body) => client.post('/whatsapp/campaigns', body),
+    getCampaign: (id) => client.get(`/whatsapp/campaigns/${id}`),
+    startCampaign: (id) => client.post(`/whatsapp/campaigns/${id}/start`),
+    pauseCampaign: (id) => client.post(`/whatsapp/campaigns/${id}/pause`),
+    deleteCampaign: (id) => client.delete(`/whatsapp/campaigns/${id}`)
 }

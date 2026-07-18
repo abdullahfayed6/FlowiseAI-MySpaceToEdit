@@ -40,6 +40,7 @@ import { Telemetry } from './utils/telemetry'
 import { validateAPIKey } from './utils/validateKey'
 import { getAllowedIframeOrigins, getCorsOptions, sanitizeMiddleware } from './utils/XSS'
 import { WhatsAppSessionManager } from './utils/WhatsAppSessionManager'
+import { WhatsAppCampaignManager } from './utils/WhatsAppCampaignManager'
 
 declare global {
     namespace Express {
@@ -103,6 +104,10 @@ export class App {
             // Initialize WhatsApp Sessions
             await WhatsAppSessionManager.getInstance().initializeAllSessions()
             logger.info('📱 [server]: WhatsApp sessions initialized successfully')
+
+            // Initialize WhatsApp Campaigns
+            WhatsAppCampaignManager.getInstance()
+            logger.info('📢 [server]: WhatsApp campaigns manager initialized successfully')
 
             // Initialize Identity Manager
             this.identityManager = await IdentityManager.getInstance()
@@ -441,9 +446,7 @@ async function ensureWhatsAppTables(dataSource: DataSource) {
                         ? `SELECT column_name FROM information_schema.columns WHERE table_name = 'whatsapp_device' AND column_name = '${colName}';`
                         : `PRAGMA table_info(whatsapp_device);`
                 )
-                const exists = dbType === 'postgres'
-                    ? columns.length > 0
-                    : columns.some((col: any) => col.name === colName)
+                const exists = dbType === 'postgres' ? columns.length > 0 : columns.some((col: any) => col.name === colName)
                 if (!exists) {
                     await queryRunner.query(`ALTER TABLE whatsapp_device ADD COLUMN "${colName}" ${colType};`)
                     logger.info(`Added missing column ${colName} to whatsapp_device`)
@@ -484,9 +487,7 @@ async function ensureWhatsAppTables(dataSource: DataSource) {
                         ? `SELECT column_name FROM information_schema.columns WHERE table_name = 'whatsapp_chatbot' AND column_name = '${colName}';`
                         : `PRAGMA table_info(whatsapp_chatbot);`
                 )
-                const exists = dbType === 'postgres'
-                    ? columns.length > 0
-                    : columns.some((col: any) => col.name === colName)
+                const exists = dbType === 'postgres' ? columns.length > 0 : columns.some((col: any) => col.name === colName)
                 if (!exists) {
                     const defaultSql = defaultVal !== undefined ? ` DEFAULT ${defaultVal}` : ''
                     await queryRunner.query(`ALTER TABLE whatsapp_chatbot ADD COLUMN "${colName}" ${colType}${defaultSql};`)
@@ -497,9 +498,53 @@ async function ensureWhatsAppTables(dataSource: DataSource) {
             await ensureChatbotColumn('followUpDelayMinutes', 'INTEGER', '1440')
             await ensureChatbotColumn('followUpSystemPrompt', textCol)
             await ensureChatbotColumn('businessHoursEnabled', boolCol, dbType === 'postgres' ? 'FALSE' : '0')
-            await ensureChatbotColumn('businessHoursStart', "VARCHAR(50)", "'09:00'")
-            await ensureChatbotColumn('businessHoursEnd', "VARCHAR(50)", "'22:00'")
+            await ensureChatbotColumn('businessHoursStart', 'VARCHAR(50)', "'09:00'")
+            await ensureChatbotColumn('businessHoursEnd', 'VARCHAR(50)', "'22:00'")
             await ensureChatbotColumn('outsideHoursMessage', textCol)
+        }
+
+        // Create whatsapp_campaign and whatsapp_campaign_recipient tables
+        const hasCampaignTable = await queryRunner.hasTable('whatsapp_campaign')
+        if (!hasCampaignTable) {
+            const idCol = dbType === 'postgres' ? 'UUID PRIMARY KEY' : 'VARCHAR(36) PRIMARY KEY'
+            await queryRunner.query(`
+                CREATE TABLE whatsapp_campaign (
+                    id ${idCol},
+                    name VARCHAR(255) NOT NULL,
+                    messageTemplate ${textCol} NOT NULL,
+                    deviceIds ${textCol} NOT NULL,
+                    status VARCHAR(50) DEFAULT 'PENDING',
+                    totalRecipients INTEGER DEFAULT 0,
+                    sentCount INTEGER DEFAULT 0,
+                    failedCount INTEGER DEFAULT 0,
+                    baseDelay INTEGER DEFAULT 30,
+                    jitter INTEGER DEFAULT 10,
+                    dailyLimit INTEGER DEFAULT 150,
+                    createdBy ${textCol},
+                    createdDate ${dateCol},
+                    updatedDate ${dateCol}
+                );
+            `)
+            logger.info('Created whatsapp_campaign table')
+        }
+
+        const hasRecipientTable = await queryRunner.hasTable('whatsapp_campaign_recipient')
+        if (!hasRecipientTable) {
+            const idCol = dbType === 'postgres' ? 'UUID PRIMARY KEY' : 'VARCHAR(36) PRIMARY KEY'
+            await queryRunner.query(`
+                CREATE TABLE whatsapp_campaign_recipient (
+                    id ${idCol},
+                    campaignId VARCHAR(36) NOT NULL,
+                    phoneNumber VARCHAR(255) NOT NULL,
+                    name VARCHAR(255),
+                    status VARCHAR(50) DEFAULT 'PENDING',
+                    errorMessage ${textCol},
+                    sentDeviceId VARCHAR(36),
+                    sentDate ${dbType === 'postgres' ? 'TIMESTAMP' : 'DATETIME'},
+                    createdDate ${dateCol}
+                );
+            `)
+            logger.info('Created whatsapp_campaign_recipient table')
         }
     } catch (e: any) {
         logger.error('Error ensuring WhatsApp database tables:', e.message)

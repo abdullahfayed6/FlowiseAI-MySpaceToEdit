@@ -27,7 +27,8 @@ import {
     IconDeviceMobile,
     IconMessage2Code,
     IconMessageCircle,
-    IconBrandWhatsapp
+    IconBrandWhatsapp,
+    IconSend
 } from '@tabler/icons-react'
 
 // constant
@@ -59,7 +60,8 @@ const icons = {
     IconShieldLock,
     IconListCheck,
     IconDeviceMobile,
-    IconMessage2Code
+    IconMessage2Code,
+    IconSend
 }
 
 // ==============================|| DASHBOARD MENU ITEMS ||============================== //
@@ -197,6 +199,15 @@ const dashboard = {
                     icon: icons.IconBrandWhatsapp,
                     breadcrumbs: true,
                     permission: 'whatsapp-inbox:view'
+                },
+                {
+                    id: 'whatsapp-campaigns',
+                    title: 'WA Campaigns',
+                    type: 'item',
+                    url: '/whatsapp-campaigns',
+                    icon: icons.IconSend,
+                    breadcrumbs: true,
+                    permission: 'whatsapp-campaigns:view'
                 }
             ]
         },

@@ -62,6 +62,8 @@ const Logs = Loadable(lazy(() => import('@/views/serverlogs')))
 const WhatsAppDevices = Loadable(lazy(() => import('@/views/whatsapp-devices')))
 const WhatsAppChatbots = Loadable(lazy(() => import('@/views/whatsapp-chatbots')))
 const WhatsAppInbox = Loadable(lazy(() => import('@/views/whatsapp-inbox')))
+const WhatsAppCampaigns = Loadable(lazy(() => import('@/views/whatsapp-campaigns')))
+const WhatsAppCampaignDetails = Loadable(lazy(() => import('@/views/whatsapp-campaigns/CampaignDetails')))
 
 // executions routing
 const Executions = Loadable(lazy(() => import('@/views/agentexecutions')))
@@ -370,6 +372,22 @@ const MainRoutes = {
             element: (
                 <RequireAuth permission={'whatsapp-inbox:view'}>
                     <WhatsAppInbox />
+                </RequireAuth>
+            )
+        },
+        {
+            path: '/whatsapp-campaigns',
+            element: (
+                <RequireAuth permission={'whatsapp-campaigns:view'}>
+                    <WhatsAppCampaigns />
+                </RequireAuth>
+            )
+        },
+        {
+            path: '/whatsapp-campaigns/:id',
+            element: (
+                <RequireAuth permission={'whatsapp-campaigns:view'}>
+                    <WhatsAppCampaignDetails />
                 </RequireAuth>
             )
         }

@@ -29,6 +29,8 @@ import { LoginSession } from '../../enterprise/database/entities/login-session.e
 
 import { WhatsAppDevice } from './WhatsAppDevice'
 import { WhatsAppChatbot } from './WhatsAppChatbot'
+import { WhatsAppCampaign } from './WhatsAppCampaign'
+import { WhatsAppCampaignRecipient } from './WhatsAppCampaignRecipient'
 
 export const entities = {
     ChatFlow,
@@ -62,5 +64,7 @@ export const entities = {
     LoginMethod,
     LoginSession,
     WhatsAppDevice,
-    WhatsAppChatbot
+    WhatsAppChatbot,
+    WhatsAppCampaign,
+    WhatsAppCampaignRecipient
 }

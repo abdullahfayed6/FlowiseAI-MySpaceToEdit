@@ -12,6 +12,8 @@ import { getDataSource } from '../../DataSource'
 import { WhatsAppDevice } from '../../database/entities/WhatsAppDevice'
 import { WhatsAppChatbot } from '../../database/entities/WhatsAppChatbot'
 import { ChatMessage } from '../../database/entities/ChatMessage'
+import { WhatsAppCampaign } from '../../database/entities/WhatsAppCampaign'
+import { WhatsAppCampaignRecipient } from '../../database/entities/WhatsAppCampaignRecipient'
 import logger from '../../utils/logger'
 import { WhatsAppSessionManager } from '../../utils/WhatsAppSessionManager'
 
@@ -570,6 +572,191 @@ const downloadMessageMedia = async (req: Request, res: Response, next: NextFunct
     }
 }
 
+const getCampaigns = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const repo = getDataSource().getRepository(WhatsAppCampaign)
+        const currentUser = req.user as any
+        let campaigns: WhatsAppCampaign[] = []
+        if (currentUser && currentUser.email === 'admin@admin.com') {
+            campaigns = await repo.find({ order: { createdDate: 'DESC' } })
+        } else if (currentUser) {
+            campaigns = await repo.find({
+                where: { createdBy: currentUser.id },
+                order: { createdDate: 'DESC' }
+            })
+        }
+        return res.status(200).json(campaigns)
+    } catch (error) {
+        next(error)
+    }
+}
+
+const createCampaign = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const { name, messageTemplate, deviceIds, recipients, baseDelay, jitter, dailyLimit } = req.body
+        if (
+            !name ||
+            !messageTemplate ||
+            !Array.isArray(deviceIds) ||
+            deviceIds.length === 0 ||
+            !Array.isArray(recipients) ||
+            recipients.length === 0
+        ) {
+            return res.status(400).json({ error: 'Name, messageTemplate, deviceIds, and recipients are required' })
+        }
+
+        // Check permissions for each device
+        for (const devId of deviceIds) {
+            if (!(await checkAllowedDevice(req, devId))) {
+                return res.status(403).json({ error: `Access denied to device: ${devId}` })
+            }
+        }
+
+        const currentUser = req.user as any
+        const dataSource = getDataSource()
+        const campaignRepo = dataSource.getRepository(WhatsAppCampaign)
+        const recipientRepo = dataSource.getRepository(WhatsAppCampaignRecipient)
+
+        const campaign = new WhatsAppCampaign()
+        campaign.name = name
+        campaign.messageTemplate = messageTemplate
+        campaign.deviceIds = JSON.stringify(deviceIds)
+        campaign.status = 'PENDING'
+        campaign.totalRecipients = recipients.length
+        campaign.sentCount = 0
+        campaign.failedCount = 0
+        campaign.baseDelay = baseDelay !== undefined ? Number(baseDelay) : 30
+        campaign.jitter = jitter !== undefined ? Number(jitter) : 10
+        campaign.dailyLimit = dailyLimit !== undefined ? Number(dailyLimit) : 150
+        if (currentUser) {
+            campaign.createdBy = currentUser.id
+        }
+
+        const savedCampaign = await campaignRepo.save(campaign)
+
+        // Insert recipients
+        const recipientEntities = recipients.map((r: any) => {
+            const rec = new WhatsAppCampaignRecipient()
+            rec.campaignId = savedCampaign.id
+            rec.phoneNumber = r.phoneNumber
+            rec.name = r.name
+            rec.status = 'PENDING'
+            return rec
+        })
+
+        // Save recipient entities in chunks to avoid sqlite variable limit limits (max 999 variables)
+        const chunkSize = 100
+        for (let i = 0; i < recipientEntities.length; i += chunkSize) {
+            const chunk = recipientEntities.slice(i, i + chunkSize)
+            await recipientRepo.save(chunk)
+        }
+
+        return res.status(201).json(savedCampaign)
+    } catch (error) {
+        next(error)
+    }
+}
+
+const getCampaign = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const { id } = req.params
+        const campaignRepo = getDataSource().getRepository(WhatsAppCampaign)
+        const recipientRepo = getDataSource().getRepository(WhatsAppCampaignRecipient)
+
+        const campaign = await campaignRepo.findOneBy({ id })
+        if (!campaign) {
+            return res.status(404).json({ error: 'Campaign not found' })
+        }
+
+        // Access control
+        const currentUser = req.user as any
+        if (currentUser && currentUser.email !== 'admin@admin.com' && campaign.createdBy !== currentUser.id) {
+            return res.status(403).json({ error: 'Access denied' })
+        }
+
+        const recipients = await recipientRepo.find({
+            where: { campaignId: id },
+            order: { createdDate: 'ASC' }
+        })
+
+        return res.status(200).json({
+            ...campaign,
+            recipients
+        })
+    } catch (error) {
+        next(error)
+    }
+}
+
+const startCampaign = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const { id } = req.params
+        const repo = getDataSource().getRepository(WhatsAppCampaign)
+        const campaign = await repo.findOneBy({ id })
+        if (!campaign) {
+            return res.status(404).json({ error: 'Campaign not found' })
+        }
+
+        const currentUser = req.user as any
+        if (currentUser && currentUser.email !== 'admin@admin.com' && campaign.createdBy !== currentUser.id) {
+            return res.status(403).json({ error: 'Access denied' })
+        }
+
+        campaign.status = 'RUNNING'
+        const updated = await repo.save(campaign)
+        return res.status(200).json(updated)
+    } catch (error) {
+        next(error)
+    }
+}
+
+const pauseCampaign = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const { id } = req.params
+        const repo = getDataSource().getRepository(WhatsAppCampaign)
+        const campaign = await repo.findOneBy({ id })
+        if (!campaign) {
+            return res.status(404).json({ error: 'Campaign not found' })
+        }
+
+        const currentUser = req.user as any
+        if (currentUser && currentUser.email !== 'admin@admin.com' && campaign.createdBy !== currentUser.id) {
+            return res.status(403).json({ error: 'Access denied' })
+        }
+
+        campaign.status = 'PAUSED'
+        const updated = await repo.save(campaign)
+        return res.status(200).json(updated)
+    } catch (error) {
+        next(error)
+    }
+}
+
+const deleteCampaign = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const { id } = req.params
+        const campaignRepo = getDataSource().getRepository(WhatsAppCampaign)
+        const recipientRepo = getDataSource().getRepository(WhatsAppCampaignRecipient)
+
+        const campaign = await campaignRepo.findOneBy({ id })
+        if (!campaign) {
+            return res.status(404).json({ error: 'Campaign not found' })
+        }
+
+        const currentUser = req.user as any
+        if (currentUser && currentUser.email !== 'admin@admin.com' && campaign.createdBy !== currentUser.id) {
+            return res.status(403).json({ error: 'Access denied' })
+        }
+
+        await recipientRepo.delete({ campaignId: id })
+        await campaignRepo.delete({ id })
+
+        return res.status(200).json({ message: 'Campaign deleted successfully' })
+    } catch (error) {
+        next(error)
+    }
+}
+
 export default {
     getDevices,
     addDevice,
@@ -584,5 +771,11 @@ export default {
     sendMessage,
     toggleChatAI,
     deleteChat,
-    downloadMessageMedia
+    downloadMessageMedia,
+    getCampaigns,
+    createCampaign,
+    getCampaign,
+    startCampaign,
+    pauseCampaign,
+    deleteCampaign
 }
