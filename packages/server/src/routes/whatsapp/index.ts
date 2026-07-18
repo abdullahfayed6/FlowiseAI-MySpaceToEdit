@@ -9,6 +9,12 @@ router.get('/devices', checkPermission('whatsapp-devices:view'), whatsappControl
 router.post('/devices', checkPermission('whatsapp-devices:view'), whatsappController.addDevice)
 router.delete('/devices/:id', checkPermission('whatsapp-devices:view'), whatsappController.deleteDevice)
 router.get('/devices/:id/qr', checkPermission('whatsapp-devices:view'), whatsappController.getDeviceQR)
+router.get('/devices/:deviceId/groups', checkPermission('whatsapp-devices:view'), whatsappController.getDeviceGroups)
+router.get(
+    '/devices/:deviceId/groups/:groupId/participants',
+    checkPermission('whatsapp-devices:view'),
+    whatsappController.getGroupParticipants
+)
 
 // Chatbots
 router.get('/chatbots', checkPermission('whatsapp-chatbots:view'), whatsappController.getChatbots)

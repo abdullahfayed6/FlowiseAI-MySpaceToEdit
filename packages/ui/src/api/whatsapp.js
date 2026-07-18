@@ -35,5 +35,9 @@ export default {
     getCampaign: (id) => client.get(`/whatsapp/campaigns/${id}`),
     startCampaign: (id) => client.post(`/whatsapp/campaigns/${id}/start`),
     pauseCampaign: (id) => client.post(`/whatsapp/campaigns/${id}/pause`),
-    deleteCampaign: (id) => client.delete(`/whatsapp/campaigns/${id}`)
+    deleteCampaign: (id) => client.delete(`/whatsapp/campaigns/${id}`),
+
+    // Group Scraping
+    getDeviceGroups: (deviceId) => client.get(`/whatsapp/devices/${deviceId}/groups`),
+    getGroupParticipants: (deviceId, groupId) => client.get(`/whatsapp/devices/${deviceId}/groups/${groupId}/participants`)
 }

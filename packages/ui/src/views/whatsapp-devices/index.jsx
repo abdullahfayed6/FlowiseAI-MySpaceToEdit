@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
     Box,
     Button,
@@ -14,15 +14,22 @@ import {
     IconButton,
     Stack,
     TextField,
-    Typography
+    Typography,
+    Table,
+    TableBody,
+    TableCell,
+    TableContainer,
+    TableHead,
+    TableRow,
+    Paper,
+    Divider
 } from '@mui/material'
 import { useTheme } from '@mui/material/styles'
-import { IconPlus, IconTrash, IconDeviceMobile, IconRefresh } from '@tabler/icons-react'
+import { IconPlus, IconTrash, IconDeviceMobile, IconRefresh, IconUsers, IconDownload } from '@tabler/icons-react'
 
 // project imports
 import ViewHeader from '@/layout/MainLayout/ViewHeader'
 import whatsappApi from '@/api/whatsapp'
-import useApi from '@/hooks/useApi'
 
 const WhatsAppDevices = () => {
     const theme = useTheme()
@@ -34,6 +41,13 @@ const WhatsAppDevices = () => {
     const [qrCodeData, setQrCodeData] = useState(null)
     const [qrStatus, setQrStatus] = useState('INITIALIZING')
     const [qrPhoneNumber, setQrPhoneNumber] = useState(null)
+
+    // Groups Scraping States
+    const [openGroupsDialog, setOpenGroupsDialog] = useState(false)
+    const [groupsLoading, setGroupsLoading] = useState(false)
+    const [groups, setGroups] = useState([])
+    const [selectedDeviceForGroups, setSelectedDeviceForGroups] = useState('')
+    const [selectedDeviceNameForGroups, setSelectedDeviceNameForGroups] = useState('')
 
     const fetchDevices = async () => {
         try {
@@ -136,6 +150,56 @@ const WhatsAppDevices = () => {
         setOpenAddDialog(true)
     }
 
+    const handleOpenGroupsDialog = async (deviceId, deviceName) => {
+        setSelectedDeviceForGroups(deviceId)
+        setSelectedDeviceNameForGroups(deviceName)
+        setGroups([])
+        setGroupsLoading(true)
+        setOpenGroupsDialog(true)
+        try {
+            const res = await whatsappApi.getDeviceGroups(deviceId)
+            if (res && res.data) {
+                setGroups(res.data)
+            }
+        } catch (error) {
+            console.error('Error fetching device groups:', error)
+            alert('Failed to load WhatsApp groups')
+        } finally {
+            setGroupsLoading(false)
+        }
+    }
+
+    const handleDownloadGroupMembers = async (groupId, groupSubject) => {
+        try {
+            const res = await whatsappApi.getGroupParticipants(selectedDeviceForGroups, groupId)
+            if (res && res.data && res.data.participants) {
+                const participants = res.data.participants
+
+                // Format CSV: Phone Number, JID, Role
+                const headers = ['Phone Number', 'WhatsApp JID', 'Role']
+                const csvRows = [headers.join(',')]
+
+                for (const p of participants) {
+                    csvRows.push([p.phoneNumber, p.jid, p.role].join(','))
+                }
+
+                const csvContent = '\uFEFF' + csvRows.join('\n') // UTF-8 BOM for Arabic support
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+                const url = URL.createObjectURL(blob)
+
+                const link = document.createElement('a')
+                link.setAttribute('href', url)
+                link.setAttribute('download', `group_${groupSubject.replace(/\s+/g, '_')}_members.csv`)
+                document.body.appendChild(link)
+                link.click()
+                document.body.removeChild(link)
+            }
+        } catch (error) {
+            console.error('Error exporting group members:', error)
+            alert('Failed to export group members')
+        }
+    }
+
     const getStatusColor = (status) => {
         switch (status) {
             case 'CONNECTED':
@@ -167,7 +231,7 @@ const WhatsAppDevices = () => {
                                 No WhatsApp devices connected yet
                             </Typography>
                             <Typography variant='body2' color='textSecondary' sx={{ mt: 1 }}>
-                                Click the "Add Device" button to link your WhatsApp account.
+                                Click the &quot;Add Device&quot; button to link your WhatsApp account.
                             </Typography>
                         </Box>
                     </Grid>
@@ -195,6 +259,15 @@ const WhatsAppDevices = () => {
                                     </Stack>
 
                                     <Stack direction='row' justifyContent='flex-end' spacing={1} sx={{ mt: 3 }}>
+                                        {device.status === 'CONNECTED' && (
+                                            <IconButton
+                                                color='secondary'
+                                                title='Scrape Group Members (سحب المجموعات)'
+                                                onClick={() => handleOpenGroupsDialog(device.id, device.name)}
+                                            >
+                                                <IconUsers />
+                                            </IconButton>
+                                        )}
                                         {device.status !== 'CONNECTED' && (
                                             <IconButton
                                                 color='primary'
@@ -224,7 +297,6 @@ const WhatsAppDevices = () => {
                     {!activeQrDeviceId ? (
                         <Box sx={{ pt: 2 }}>
                             <TextField
-                                autoFocus
                                 fullWidth
                                 label='Device Name'
                                 variant='outlined'
@@ -286,6 +358,72 @@ const WhatsAppDevices = () => {
                             Next
                         </Button>
                     )}
+                </DialogActions>
+            </Dialog>
+
+            {/* Scrape WhatsApp Groups Dialog */}
+            <Dialog open={openGroupsDialog} onClose={() => setOpenGroupsDialog(false)} maxWidth='md' fullWidth>
+                <DialogTitle sx={{ pb: 0 }}>
+                    <Typography variant='h4'>Scrape WhatsApp Groups: {selectedDeviceNameForGroups}</Typography>
+                    <Typography variant='caption' color='textSecondary'>
+                        Select a group to download all participant phone numbers
+                    </Typography>
+                </DialogTitle>
+                <Divider sx={{ my: 1.5 }} />
+                <DialogContent>
+                    {groupsLoading ? (
+                        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', py: 4 }}>
+                            <CircularProgress size={40} sx={{ mb: 2 }} />
+                            <Typography>Fetching groups. Please wait...</Typography>
+                        </Box>
+                    ) : groups.length === 0 ? (
+                        <Box sx={{ textAlign: 'center', py: 4 }}>
+                            <Typography color='textSecondary'>No WhatsApp groups found for this device.</Typography>
+                        </Box>
+                    ) : (
+                        <TableContainer component={Paper} variant='outlined' sx={{ borderRadius: 2 }}>
+                            <Table size='small'>
+                                <TableHead sx={{ backgroundColor: theme.palette.grey[50] }}>
+                                    <TableRow>
+                                        <TableCell sx={{ fontWeight: 'bold' }}>GROUP NAME</TableCell>
+                                        <TableCell sx={{ fontWeight: 'bold' }}>GROUP JID</TableCell>
+                                        <TableCell sx={{ fontWeight: 'bold' }}>MEMBERS</TableCell>
+                                        <TableCell sx={{ fontWeight: 'bold' }} align='right'>
+                                            EXPORT
+                                        </TableCell>
+                                    </TableRow>
+                                </TableHead>
+                                <TableBody>
+                                    {groups.map((group) => (
+                                        <TableRow key={group.id} hover>
+                                            <TableCell sx={{ fontWeight: 500 }}>{group.subject}</TableCell>
+                                            <TableCell sx={{ color: 'text.secondary', fontSize: '0.75rem' }}>{group.id}</TableCell>
+                                            <TableCell>
+                                                <Chip label={`${group.participantsCount} Members`} size='small' variant='outlined' />
+                                            </TableCell>
+                                            <TableCell align='right'>
+                                                <Button
+                                                    size='small'
+                                                    variant='contained'
+                                                    color='primary'
+                                                    startIcon={<IconDownload />}
+                                                    onClick={() => handleDownloadGroupMembers(group.id, group.subject)}
+                                                    sx={{ borderRadius: 1.5 }}
+                                                >
+                                                    Export CSV
+                                                </Button>
+                                            </TableCell>
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        </TableContainer>
+                    )}
+                </DialogContent>
+                <DialogActions sx={{ p: 2 }}>
+                    <Button onClick={() => setOpenGroupsDialog(false)} color='inherit'>
+                        Close
+                    </Button>
                 </DialogActions>
             </Dialog>
         </Box>

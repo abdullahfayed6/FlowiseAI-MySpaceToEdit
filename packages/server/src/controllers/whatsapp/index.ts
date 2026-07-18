@@ -757,6 +757,68 @@ const deleteCampaign = async (req: Request, res: Response, next: NextFunction) =
     }
 }
 
+const getDeviceGroups = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const { deviceId } = req.params
+        if (!(await checkAllowedDevice(req, deviceId))) {
+            return res.status(403).json({ error: 'Access denied' })
+        }
+
+        const client = WhatsAppSessionManager.getInstance().getClient(deviceId)
+        if (!client) {
+            return res.status(404).json({ error: 'WhatsApp device not connected or not found' })
+        }
+
+        // Fetch all participating groups
+        const groups = await client.groupFetchAllParticipating()
+        const formattedGroups = Object.values(groups).map((group: any) => ({
+            id: group.id,
+            subject: group.subject,
+            participantsCount: group.participants ? group.participants.length : 0
+        }))
+
+        return res.status(200).json(formattedGroups)
+    } catch (error) {
+        next(error)
+    }
+}
+
+const getGroupParticipants = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const { deviceId, groupId } = req.params
+        if (!(await checkAllowedDevice(req, deviceId))) {
+            return res.status(403).json({ error: 'Access denied' })
+        }
+
+        const client = WhatsAppSessionManager.getInstance().getClient(deviceId)
+        if (!client) {
+            return res.status(404).json({ error: 'WhatsApp device not connected or not found' })
+        }
+
+        const groupMeta = await client.groupMetadata(groupId)
+        if (!groupMeta) {
+            return res.status(404).json({ error: 'Group metadata not found' })
+        }
+
+        const participants = groupMeta.participants.map((p: any) => {
+            const phoneNumber = p.id.split('@')[0]
+            return {
+                jid: p.id,
+                phoneNumber,
+                role: p.admin ? (p.admin === 'superadmin' ? 'Super Admin' : 'Admin') : 'Member'
+            }
+        })
+
+        return res.status(200).json({
+            id: groupMeta.id,
+            subject: groupMeta.subject,
+            participants
+        })
+    } catch (error) {
+        next(error)
+    }
+}
+
 export default {
     getDevices,
     addDevice,
@@ -777,5 +839,7 @@ export default {
     getCampaign,
     startCampaign,
     pauseCampaign,
-    deleteCampaign
+    deleteCampaign,
+    getDeviceGroups,
+    getGroupParticipants
 }
