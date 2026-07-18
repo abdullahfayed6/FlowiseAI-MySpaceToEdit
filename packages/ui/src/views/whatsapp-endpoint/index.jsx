@@ -22,10 +22,15 @@ import {
     TableRow,
     Tooltip,
     IconButton,
-    Chip
+    Chip,
+    Dialog,
+    DialogTitle,
+    DialogContent,
+    DialogActions,
+    CircularProgress
 } from '@mui/material'
 import { useTheme } from '@mui/material/styles'
-import { IconCopy, IconCheck, IconExternalLink } from '@tabler/icons-react'
+import { IconCopy, IconCheck, IconPlus, IconTrash } from '@tabler/icons-react'
 
 // project imports
 import ViewHeader from '@/layout/MainLayout/ViewHeader'
@@ -38,7 +43,16 @@ const WhatsAppEndpoint = () => {
     // API Key states
     const [apiKeys, setApiKeys] = useState([])
     const [selectedApiKey, setSelectedApiKey] = useState('')
+    const [selectedKeyId, setSelectedKeyId] = useState('')
     const [copied, setCopied] = useState(false)
+    const [tokenCopied, setTokenCopied] = useState(false)
+
+    // Token creation dialog states
+    const [newTokenDialogOpen, setNewTokenDialogOpen] = useState(false)
+    const [newTokenLabel, setNewTokenLabel] = useState('')
+    const [isCreatingKey, setIsCreatingKey] = useState(false)
+    const [newlyCreatedKey, setNewlyCreatedKey] = useState('')
+    const [showCopyDialog, setShowCopyDialog] = useState(false)
 
     // Form inputs for live preview
     const [messageType, setMessageType] = useState('text')
@@ -56,8 +70,12 @@ const WhatsAppEndpoint = () => {
 
     const getAllAPIKeysApi = useApi(apiKeyApi.getAllAPIKeys)
 
-    useEffect(() => {
+    const fetchKeys = () => {
         getAllAPIKeysApi.request()
+    }
+
+    useEffect(() => {
+        fetchKeys()
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
@@ -65,9 +83,18 @@ const WhatsAppEndpoint = () => {
         if (getAllAPIKeysApi.data) {
             setApiKeys(getAllAPIKeysApi.data)
             if (getAllAPIKeysApi.data.length > 0) {
-                setSelectedApiKey(getAllAPIKeysApi.data[0].apiKey)
+                // If there's an existing selection, keep it, otherwise set first
+                const currentExists = getAllAPIKeysApi.data.find((k) => k.apiKey === selectedApiKey)
+                if (!currentExists) {
+                    setSelectedApiKey(getAllAPIKeysApi.data[0].apiKey)
+                    setSelectedKeyId(getAllAPIKeysApi.data[0].id)
+                }
+            } else {
+                setSelectedApiKey('')
+                setSelectedKeyId('')
             }
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [getAllAPIKeysApi.data])
 
     const endpointUrl = `${window.location.origin}/api/v1/whatsapp/rest/send_message`
@@ -76,6 +103,59 @@ const WhatsAppEndpoint = () => {
         navigator.clipboard.writeText(text)
         setCopied(true)
         setTimeout(() => setCopied(false), 2000)
+    }
+
+    const handleCopyTokenOnly = (text) => {
+        navigator.clipboard.writeText(text)
+        setTokenCopied(true)
+        setTimeout(() => setTokenCopied(false), 2000)
+    }
+
+    const handleCreateToken = async () => {
+        if (!newTokenLabel.trim()) return
+        setIsCreatingKey(true)
+        try {
+            const res = await apiKeyApi.createNewAPI({
+                keyName: newTokenLabel,
+                permissions: []
+            })
+            if (res.data) {
+                setNewlyCreatedKey(res.data.apiKey)
+                setNewTokenDialogOpen(false)
+                setNewTokenLabel('')
+                setShowCopyDialog(true)
+                // Select the new key
+                setSelectedApiKey(res.data.apiKey)
+                setSelectedKeyId(res.data.id)
+                fetchKeys()
+            }
+        } catch (e) {
+            console.error('Failed to create new token:', e)
+        } finally {
+            setIsCreatingKey(false)
+        }
+    }
+
+    const handleDeleteToken = async () => {
+        if (!selectedKeyId) return
+        if (window.confirm('Are you sure you want to revoke/delete this WhatsApp API token?')) {
+            try {
+                await apiKeyApi.deleteAPI(selectedKeyId)
+                setSelectedApiKey('')
+                setSelectedKeyId('')
+                fetchKeys()
+            } catch (e) {
+                console.error('Failed to delete token:', e)
+            }
+        }
+    }
+
+    const handleSelectKeyChange = (apiKeyVal) => {
+        setSelectedApiKey(apiKeyVal)
+        const matched = apiKeys.find((k) => k.apiKey === apiKeyVal)
+        if (matched) {
+            setSelectedKeyId(matched.id)
+        }
     }
 
     // Generate Request Body dynamically
@@ -150,14 +230,13 @@ print(response.json())`
             <Stack direction='row' alignItems='center' justifyContent='space-between' sx={{ mb: 3 }}>
                 <ViewHeader title='REST API Endpoint' description='Send WhatsApp messages programmatically from any platform or language' />
                 <Button
-                    variant='outlined'
+                    variant='contained'
                     color='primary'
-                    startIcon={<IconExternalLink />}
-                    href='/apikey'
-                    target='_self'
+                    startIcon={<IconPlus />}
+                    onClick={() => setNewTokenDialogOpen(true)}
                     sx={{ borderRadius: 2 }}
                 >
-                    Manage API Keys
+                    Generate New Token (إنشاء توكين جديد)
                 </Button>
             </Stack>
 
@@ -171,26 +250,36 @@ print(response.json())`
                             </Typography>
 
                             <Stack spacing={2.5}>
-                                {/* Token Selector */}
+                                {/* Token Selector with Inline CRUD */}
                                 {apiKeys.length === 0 ? (
                                     <Alert severity='warning' sx={{ borderRadius: 2 }}>
-                                        No API Keys found in this workspace. Please create one in Settings to authenticate requests.
+                                        No API Tokens found in this workspace. Please click &quot;Generate New Token&quot; above to get
+                                        started.
                                     </Alert>
                                 ) : (
-                                    <TextField
-                                        select
-                                        fullWidth
-                                        label='Select API Key'
-                                        value={selectedApiKey}
-                                        onChange={(e) => setSelectedApiKey(e.target.value)}
-                                        helperText='Authentication token'
-                                    >
-                                        {apiKeys.map((key) => (
-                                            <MenuItem key={key.id} value={key.apiKey}>
-                                                {key.label} ({key.apiKey.substring(0, 8)}...)
-                                            </MenuItem>
-                                        ))}
-                                    </TextField>
+                                    <Stack direction='row' spacing={1} alignItems='center'>
+                                        <TextField
+                                            select
+                                            fullWidth
+                                            label='Select API Key'
+                                            value={selectedApiKey}
+                                            onChange={(e) => handleSelectKeyChange(e.target.value)}
+                                            helperText='Active Token used in code snippets'
+                                        >
+                                            {apiKeys.map((key) => (
+                                                <MenuItem key={key.id} value={key.apiKey}>
+                                                    {key.keyName} ({key.apiKey.substring(0, 8)}...)
+                                                </MenuItem>
+                                            ))}
+                                        </TextField>
+                                        {selectedKeyId && (
+                                            <Tooltip title='Delete/Revoke Selected Token'>
+                                                <IconButton onClick={handleDeleteToken} color='error' sx={{ mt: -2 }}>
+                                                    <IconTrash size={20} />
+                                                </IconButton>
+                                            </Tooltip>
+                                        )}
+                                    </Stack>
                                 )}
 
                                 <TextField
@@ -208,7 +297,7 @@ print(response.json())`
                                     value={toPhone}
                                     onChange={(e) => setToPhone(e.target.value)}
                                     placeholder='e.g. 201098765432'
-                                    helperText='Recipient phone with country code (or WhatsApp group JID)'
+                                    helperText='Recipient phone (or WhatsApp group JID ending with @g.us)'
                                 />
 
                                 <TextField
@@ -428,7 +517,7 @@ print(response.json())`
                                     <TableCell sx={{ fontFamily: 'monospace' }}>to</TableCell>
                                     <TableCell>string</TableCell>
                                     <TableCell>Yes</TableCell>
-                                    <TableCell>Recipient phone number with country code</TableCell>
+                                    <TableCell>Recipient phone number or group JID</TableCell>
                                 </TableRow>
                                 <TableRow>
                                     <TableCell sx={{ fontFamily: 'monospace' }}>text</TableCell>
@@ -453,6 +542,75 @@ print(response.json())`
                     </TableContainer>
                 </Grid>
             </Grid>
+
+            {/* Dialog to create token */}
+            <Dialog open={newTokenDialogOpen} onClose={() => setNewTokenDialogOpen(false)} fullWidth maxWidth='xs'>
+                <DialogTitle sx={{ fontWeight: 'bold' }}>Generate New API Token</DialogTitle>
+                <DialogContent>
+                    <Typography variant='body2' color='textSecondary' sx={{ mb: 2 }}>
+                        Give your token a descriptive name so you remember where it is used.
+                    </Typography>
+                    <TextField
+                        fullWidth
+                        label='Token Name'
+                        value={newTokenLabel}
+                        onChange={(e) => setNewTokenLabel(e.target.value)}
+                        placeholder='e.g. WhatsApp Marketing Server'
+                        disabled={isCreatingKey}
+                    />
+                </DialogContent>
+                <DialogActions sx={{ px: 3, pb: 3 }}>
+                    <Button onClick={() => setNewTokenDialogOpen(false)} color='inherit' disabled={isCreatingKey}>
+                        Cancel
+                    </Button>
+                    <Button
+                        variant='contained'
+                        onClick={handleCreateToken}
+                        disabled={isCreatingKey || !newTokenLabel.trim()}
+                        startIcon={isCreatingKey ? <CircularProgress size={14} color='inherit' /> : null}
+                    >
+                        Create Token
+                    </Button>
+                </DialogActions>
+            </Dialog>
+
+            {/* Dialog to display and copy raw new token */}
+            <Dialog open={showCopyDialog} onClose={() => setShowCopyDialog(false)} fullWidth maxWidth='sm'>
+                <DialogTitle sx={{ fontWeight: 'bold' }}>Token Created Successfully 🎉</DialogTitle>
+                <DialogContent>
+                    <Alert severity='warning' sx={{ mb: 2, borderRadius: 2 }}>
+                        Please copy your token now. For security reasons, <b>you will not be able to see it again</b> after closing this
+                        window.
+                    </Alert>
+                    <Paper
+                        variant='outlined'
+                        sx={{
+                            p: 2,
+                            borderRadius: 2,
+                            bgcolor: theme.palette.grey[50],
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            border: '1px dashed',
+                            borderColor: theme.palette.primary.main
+                        }}
+                    >
+                        <Typography variant='body1' sx={{ fontFamily: 'monospace', wordBreak: 'break-all', fontWeight: 'bold' }}>
+                            {newlyCreatedKey}
+                        </Typography>
+                        <Tooltip title={tokenCopied ? 'Copied!' : 'Copy Token'}>
+                            <IconButton onClick={() => handleCopyTokenOnly(newlyCreatedKey)} color='primary'>
+                                {tokenCopied ? <IconCheck /> : <IconCopy />}
+                            </IconButton>
+                        </Tooltip>
+                    </Paper>
+                </DialogContent>
+                <DialogActions sx={{ px: 3, pb: 3 }}>
+                    <Button variant='contained' onClick={() => setShowCopyDialog(false)}>
+                        Done
+                    </Button>
+                </DialogActions>
+            </Dialog>
         </Box>
     )
 }
