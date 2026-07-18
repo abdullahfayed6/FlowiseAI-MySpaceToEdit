@@ -800,14 +800,36 @@ const getGroupParticipants = async (req: Request, res: Response, next: NextFunct
             return res.status(404).json({ error: 'Group metadata not found' })
         }
 
-        const participants = groupMeta.participants.map((p: any) => {
-            const phoneNumber = p.id.split('@')[0]
-            return {
-                jid: p.id,
-                phoneNumber,
-                role: p.admin ? (p.admin === 'superadmin' ? 'Super Admin' : 'Admin') : 'Member'
-            }
-        })
+        const store = WhatsAppSessionManager.getInstance().getStore(deviceId)
+
+        const participants = await Promise.all(
+            groupMeta.participants.map(async (p: any) => {
+                let realJid = p.id
+                if (p.id.endsWith('@lid')) {
+                    const mappedPn = store?.lidToPn?.get(p.id)
+                    if (mappedPn) {
+                        realJid = mappedPn
+                    } else {
+                        try {
+                            const resolvedPn = await (client as any).signalRepository?.lidMapping?.getPNForLID?.(p.id)
+                            if (resolvedPn && typeof resolvedPn === 'string' && resolvedPn.endsWith('@s.whatsapp.net')) {
+                                realJid = resolvedPn
+                                store?.recordLidMapping?.(p.id, resolvedPn)
+                                store?.save?.()
+                            }
+                        } catch (err) {
+                            // ignore resolve errors
+                        }
+                    }
+                }
+                const phoneNumber = realJid.split('@')[0]
+                return {
+                    jid: realJid,
+                    phoneNumber,
+                    role: p.admin ? (p.admin === 'superadmin' ? 'Super Admin' : 'Admin') : 'Member'
+                }
+            })
+        )
 
         return res.status(200).json({
             id: groupMeta.id,
