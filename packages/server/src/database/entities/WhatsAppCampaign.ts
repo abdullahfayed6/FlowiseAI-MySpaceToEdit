@@ -36,6 +36,15 @@ export class WhatsAppCampaign {
     dailyLimit: number // per device daily limit
 
     @Column({ nullable: true })
+    scheduledDate?: Date
+
+    @Column({ nullable: true })
+    sendingAllowedHoursStart?: string
+
+    @Column({ nullable: true })
+    sendingAllowedHoursEnd?: string
+
+    @Column({ nullable: true })
     createdBy?: string
 
     @CreateDateColumn()

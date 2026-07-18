@@ -25,7 +25,8 @@ import {
     TableRow,
     TextField,
     Typography,
-    Alert
+    Alert,
+    CircularProgress
 } from '@mui/material'
 import { useTheme } from '@mui/material/styles'
 import {
@@ -63,6 +64,12 @@ const WhatsAppCampaigns = () => {
     const [jitter, setJitter] = useState(10)
     const [dailyLimit, setDailyLimit] = useState(150)
 
+    // New scheduling and validation states
+    const [scheduledDate, setScheduledDate] = useState('')
+    const [sendingAllowedHoursStart, setSendingAllowedHoursStart] = useState('')
+    const [sendingAllowedHoursEnd, setSendingAllowedHoursEnd] = useState('')
+    const [isValidatingNumbers, setIsValidatingNumbers] = useState(false)
+
     const fetchCampaigns = async () => {
         try {
             const res = await whatsappApi.getCampaigns()
@@ -99,6 +106,9 @@ const WhatsAppCampaigns = () => {
         setBaseDelay(30)
         setJitter(10)
         setDailyLimit(150)
+        setScheduledDate('')
+        setSendingAllowedHoursStart('')
+        setSendingAllowedHoursEnd('')
         setWizardStep(1)
         setOpenWizard(true)
     }
@@ -151,13 +161,49 @@ const WhatsAppCampaigns = () => {
                 recipients: parsedList,
                 baseDelay,
                 jitter,
-                dailyLimit
+                dailyLimit,
+                scheduledDate: scheduledDate || undefined,
+                sendingAllowedHoursStart: sendingAllowedHoursStart || undefined,
+                sendingAllowedHoursEnd: sendingAllowedHoursEnd || undefined
             })
             setOpenWizard(false)
             fetchCampaigns()
         } catch (error) {
             console.error('Error creating campaign:', error)
             alert(error.response?.data?.error || 'Failed to create campaign')
+        }
+    }
+
+    const handleValidateRecipients = async () => {
+        const parsedList = parseRecipients(recipientsRawText)
+        if (parsedList.length === 0) return
+
+        if (selectedDeviceIds.length === 0) {
+            alert('Please select at least one sending device in Step 2 before validating numbers.')
+            return
+        }
+
+        setIsValidatingNumbers(true)
+        try {
+            const deviceId = selectedDeviceIds[0]
+            const rawNumbers = parsedList.map((r) => r.phoneNumber)
+            const res = await whatsappApi.filterNumbers(deviceId, rawNumbers)
+
+            if (res && res.data) {
+                const { valid, invalid } = res.data
+                const validList = parsedList.filter((r) => valid.includes(r.phoneNumber))
+                const newRawText = validList.map((r) => `${r.phoneNumber}${r.name ? `,${r.name}` : ''}`).join('\n')
+
+                setRecipientsRawText(newRawText)
+                alert(
+                    `Validation Complete!\n\n✅ Registered on WhatsApp: ${valid.length} numbers\n❌ Invalid numbers (removed): ${invalid.length} numbers`
+                )
+            }
+        } catch (error) {
+            console.error('Error validating numbers:', error)
+            alert('Failed to validate numbers. Make sure the selected device is connected.')
+        } finally {
+            setIsValidatingNumbers(false)
         }
     }
 
@@ -454,6 +500,46 @@ const WhatsAppCampaigns = () => {
                                     </Grid>
                                 </Grid>
                             </Grid>
+                            <Grid item xs={12}>
+                                <Typography variant='h5' sx={{ mt: 1, mb: 2, fontWeight: 'bold' }}>
+                                    📅 Scheduling & Business Hours (جدولة الإرسال وساعات العمل)
+                                </Typography>
+                                <Grid container spacing={2}>
+                                    <Grid item xs={12} md={4}>
+                                        <TextField
+                                            fullWidth
+                                            type='datetime-local'
+                                            label='Scheduled Start Time'
+                                            InputLabelProps={{ shrink: true }}
+                                            value={scheduledDate}
+                                            onChange={(e) => setScheduledDate(e.target.value)}
+                                            helperText='Leave blank to start immediately'
+                                        />
+                                    </Grid>
+                                    <Grid item xs={6} md={4}>
+                                        <TextField
+                                            fullWidth
+                                            type='time'
+                                            label='Allowed Sending Window (Start)'
+                                            InputLabelProps={{ shrink: true }}
+                                            value={sendingAllowedHoursStart}
+                                            onChange={(e) => setSendingAllowedHoursStart(e.target.value)}
+                                            helperText='e.g., 09:00'
+                                        />
+                                    </Grid>
+                                    <Grid item xs={6} md={4}>
+                                        <TextField
+                                            fullWidth
+                                            type='time'
+                                            label='Allowed Sending Window (End)'
+                                            InputLabelProps={{ shrink: true }}
+                                            value={sendingAllowedHoursEnd}
+                                            onChange={(e) => setSendingAllowedHoursEnd(e.target.value)}
+                                            helperText='e.g., 17:00'
+                                        />
+                                    </Grid>
+                                </Grid>
+                            </Grid>
                         </Grid>
                     )}
 
@@ -520,7 +606,7 @@ const WhatsAppCampaigns = () => {
                                     +20123456789,أحمد)
                                 </Typography>
 
-                                <Box sx={{ mb: 2 }}>
+                                <Box sx={{ mb: 2, display: 'flex', gap: 2 }}>
                                     <input
                                         accept='.csv,.txt'
                                         style={{ display: 'none' }}
@@ -533,6 +619,16 @@ const WhatsAppCampaigns = () => {
                                             Upload CSV / Text File (رفع ملف)
                                         </Button>
                                     </label>
+
+                                    <Button
+                                        variant='contained'
+                                        color='warning'
+                                        onClick={handleValidateRecipients}
+                                        disabled={isValidatingNumbers || parseRecipients(recipientsRawText).length === 0}
+                                        startIcon={isValidatingNumbers ? <CircularProgress size={16} color='inherit' /> : null}
+                                    >
+                                        {isValidatingNumbers ? 'Validating...' : 'Validate & Filter Numbers (فحص وتصفية الأرقام)'}
+                                    </Button>
                                 </Box>
 
                                 <TextField

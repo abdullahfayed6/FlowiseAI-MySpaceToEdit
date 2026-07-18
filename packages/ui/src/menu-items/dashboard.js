@@ -208,6 +208,15 @@ const dashboard = {
                     icon: icons.IconSend,
                     breadcrumbs: true,
                     permission: 'whatsapp-campaigns:view'
+                },
+                {
+                    id: 'whatsapp-endpoint',
+                    title: 'API Endpoint',
+                    type: 'item',
+                    url: '/whatsapp-endpoint',
+                    icon: icons.IconMessage2Code,
+                    breadcrumbs: true,
+                    permission: 'whatsapp-devices:view'
                 }
             ]
         },

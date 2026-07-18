@@ -15,6 +15,11 @@ router.get(
     checkPermission('whatsapp-devices:view'),
     whatsappController.getGroupParticipants
 )
+router.post('/devices/:deviceId/filter-numbers', checkPermission('whatsapp-devices:view'), whatsappController.filterWhatsAppNumbers)
+
+// REST API
+router.post('/rest/send_message', whatsappController.restSendMessage)
+router.get('/rest/send_message', whatsappController.restSendMessage)
 
 // Chatbots
 router.get('/chatbots', checkPermission('whatsapp-chatbots:view'), whatsappController.getChatbots)

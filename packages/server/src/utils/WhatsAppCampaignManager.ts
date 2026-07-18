@@ -40,6 +40,18 @@ export class WhatsAppCampaignManager {
                 }
 
                 const campaignRepo = dataSource.getRepository(WhatsAppCampaign)
+
+                // 1. Auto-start SCHEDULED campaigns when their time arrives
+                const scheduledCampaigns = await campaignRepo.find({ where: { status: 'SCHEDULED' } })
+                const now = new Date()
+                for (const sc of scheduledCampaigns) {
+                    if (sc.scheduledDate && new Date(sc.scheduledDate) <= now) {
+                        sc.status = 'RUNNING'
+                        await campaignRepo.save(sc)
+                        logger.info(`[WhatsApp Campaign Manager] Auto-started scheduled campaign "${sc.name}"`)
+                    }
+                }
+
                 const runningCampaigns = await campaignRepo.find({ where: { status: 'RUNNING' } })
 
                 if (runningCampaigns.length === 0) {
@@ -48,6 +60,23 @@ export class WhatsAppCampaignManager {
                 }
 
                 for (const campaign of runningCampaigns) {
+                    // 2. Check Allowed hours window
+                    if (campaign.sendingAllowedHoursStart && campaign.sendingAllowedHoursEnd) {
+                        const currentHourMin = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+                        const start = campaign.sendingAllowedHoursStart
+                        const end = campaign.sendingAllowedHoursEnd
+                        let isInside = false
+                        if (start <= end) {
+                            isInside = currentHourMin >= start && currentHourMin <= end
+                        } else {
+                            isInside = currentHourMin >= start || currentHourMin <= end
+                        }
+                        if (!isInside) {
+                            // Out of allowed hours window, skip for now
+                            continue
+                        }
+                    }
+
                     await this.processCampaignStep(campaign)
                 }
             } catch (err: any) {

@@ -39,5 +39,6 @@ export default {
 
     // Group Scraping
     getDeviceGroups: (deviceId) => client.get(`/whatsapp/devices/${deviceId}/groups`),
-    getGroupParticipants: (deviceId, groupId) => client.get(`/whatsapp/devices/${deviceId}/groups/${groupId}/participants`)
+    getGroupParticipants: (deviceId, groupId) => client.get(`/whatsapp/devices/${deviceId}/groups/${groupId}/participants`),
+    filterNumbers: (deviceId, phoneNumbers) => client.post(`/whatsapp/devices/${deviceId}/filter-numbers`, { phoneNumbers })
 }

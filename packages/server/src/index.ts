@@ -520,12 +520,26 @@ async function ensureWhatsAppTables(dataSource: DataSource) {
                     baseDelay INTEGER DEFAULT 30,
                     jitter INTEGER DEFAULT 10,
                     dailyLimit INTEGER DEFAULT 150,
+                    scheduledDate ${dbType === 'postgres' ? 'TIMESTAMP' : 'DATETIME'},
+                    sendingAllowedHoursStart VARCHAR(50),
+                    sendingAllowedHoursEnd VARCHAR(50),
                     createdBy ${textCol},
                     createdDate ${dateCol},
                     updatedDate ${dateCol}
                 );
             `)
             logger.info('Created whatsapp_campaign table')
+        } else {
+            const ensureCampaignColumn = async (columnName: string, columnType: string) => {
+                const hasColumn = await queryRunner.hasColumn('whatsapp_campaign', columnName)
+                if (!hasColumn) {
+                    await queryRunner.query(`ALTER TABLE whatsapp_campaign ADD COLUMN ${columnName} ${columnType};`)
+                    logger.info(`Added column ${columnName} to whatsapp_campaign table`)
+                }
+            }
+            await ensureCampaignColumn('scheduledDate', dbType === 'postgres' ? 'TIMESTAMP' : 'DATETIME')
+            await ensureCampaignColumn('sendingAllowedHoursStart', 'VARCHAR(50)')
+            await ensureCampaignColumn('sendingAllowedHoursEnd', 'VARCHAR(50)')
         }
 
         const hasRecipientTable = await queryRunner.hasTable('whatsapp_campaign_recipient')

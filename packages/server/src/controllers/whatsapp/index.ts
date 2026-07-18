@@ -16,6 +16,7 @@ import { WhatsAppCampaign } from '../../database/entities/WhatsAppCampaign'
 import { WhatsAppCampaignRecipient } from '../../database/entities/WhatsAppCampaignRecipient'
 import logger from '../../utils/logger'
 import { WhatsAppSessionManager } from '../../utils/WhatsAppSessionManager'
+import { validateAPIKey } from '../../utils/validateKey'
 
 const checkAllowedDevice = async (req: Request, deviceId: string): Promise<boolean> => {
     const currentUser = req.user as any
@@ -593,7 +594,18 @@ const getCampaigns = async (req: Request, res: Response, next: NextFunction) => 
 
 const createCampaign = async (req: Request, res: Response, next: NextFunction) => {
     try {
-        const { name, messageTemplate, deviceIds, recipients, baseDelay, jitter, dailyLimit } = req.body
+        const {
+            name,
+            messageTemplate,
+            deviceIds,
+            recipients,
+            baseDelay,
+            jitter,
+            dailyLimit,
+            scheduledDate,
+            sendingAllowedHoursStart,
+            sendingAllowedHoursEnd
+        } = req.body
         if (
             !name ||
             !messageTemplate ||
@@ -621,13 +633,16 @@ const createCampaign = async (req: Request, res: Response, next: NextFunction) =
         campaign.name = name
         campaign.messageTemplate = messageTemplate
         campaign.deviceIds = JSON.stringify(deviceIds)
-        campaign.status = 'PENDING'
+        campaign.status = scheduledDate ? 'SCHEDULED' : 'PENDING'
         campaign.totalRecipients = recipients.length
         campaign.sentCount = 0
         campaign.failedCount = 0
         campaign.baseDelay = baseDelay !== undefined ? Number(baseDelay) : 30
         campaign.jitter = jitter !== undefined ? Number(jitter) : 10
         campaign.dailyLimit = dailyLimit !== undefined ? Number(dailyLimit) : 150
+        campaign.scheduledDate = scheduledDate ? new Date(scheduledDate) : undefined
+        campaign.sendingAllowedHoursStart = sendingAllowedHoursStart || undefined
+        campaign.sendingAllowedHoursEnd = sendingAllowedHoursEnd || undefined
         if (currentUser) {
             campaign.createdBy = currentUser.id
         }
@@ -841,6 +856,158 @@ const getGroupParticipants = async (req: Request, res: Response, next: NextFunct
     }
 }
 
+const filterWhatsAppNumbers = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const { deviceId } = req.params
+        const { phoneNumbers } = req.body
+
+        if (!(await checkAllowedDevice(req, deviceId))) {
+            return res.status(403).json({ error: 'Access denied' })
+        }
+
+        const client = WhatsAppSessionManager.getInstance().getClient(deviceId)
+        if (!client) {
+            return res.status(404).json({ error: 'WhatsApp device not connected or not found' })
+        }
+
+        if (!phoneNumbers || !Array.isArray(phoneNumbers) || phoneNumbers.length === 0) {
+            return res.status(400).json({ error: 'No phone numbers provided' })
+        }
+
+        const valid: string[] = []
+        const invalid: string[] = []
+
+        const checkNumber = async (rawPhone: string) => {
+            let clean = rawPhone.replace(/\D/g, '')
+            if (clean.startsWith('00')) {
+                clean = clean.substring(2)
+            }
+            if (!clean) {
+                invalid.push(rawPhone)
+                return
+            }
+
+            try {
+                const result = await client.onWhatsApp(clean)
+                if (result && result.length > 0 && result[0].exists) {
+                    valid.push(rawPhone)
+                } else {
+                    invalid.push(rawPhone)
+                }
+            } catch (err) {
+                invalid.push(rawPhone)
+            }
+        }
+
+        const chunkSize = 5
+        for (let i = 0; i < phoneNumbers.length; i += chunkSize) {
+            const chunk = phoneNumbers.slice(i, i + chunkSize)
+            await Promise.all(chunk.map((num) => checkNumber(num)))
+        }
+
+        return res.status(200).json({ valid, invalid })
+    } catch (error) {
+        next(error)
+    }
+}
+
+const restSendMessage = async (req: Request, res: Response, _next: NextFunction) => {
+    try {
+        let token = (req.headers.authorization || '').split('Bearer ').pop()
+        if (!token) {
+            token = (req.body.token as string) ?? (req.query.token as string) ?? ''
+            if (token) {
+                req.headers.authorization = `Bearer ${token}`
+            }
+        }
+
+        const authRes = await validateAPIKey(req)
+        if (!authRes.isValid) {
+            return res.status(401).json({ success: false, message: 'Authentication failed. Invalid API token.' })
+        }
+
+        const cleanFrom = String(req.body.from ?? req.query.from ?? '').replace(/\D/g, '')
+        const cleanTo = String(req.body.to ?? req.query.to ?? '').replace(/\D/g, '')
+        const messageType = String(req.body.messageType ?? req.query.messageType ?? 'text')
+
+        if (!cleanFrom) {
+            return res.status(400).json({ success: false, message: 'Sender number (from) is required' })
+        }
+        if (!cleanTo) {
+            return res.status(400).json({ success: false, message: 'Recipient number (to) is required' })
+        }
+
+        const deviceRepo = getDataSource().getRepository(WhatsAppDevice)
+        const device = await deviceRepo.findOneBy({ phoneNumber: cleanFrom })
+        if (!device) {
+            return res.status(404).json({ success: false, message: `Sender device with number ${cleanFrom} not found` })
+        }
+
+        const client = WhatsAppSessionManager.getInstance().getClient(device.id)
+        if (!client) {
+            return res.status(400).json({ success: false, message: 'WhatsApp device is not connected' })
+        }
+
+        const jid = `${cleanTo}@s.whatsapp.net`
+        let baileysMessage: any = null
+
+        if (messageType === 'text') {
+            const text = req.body.text ?? req.query.text
+            if (!text) return res.status(400).json({ success: false, message: 'text parameter is required' })
+            baileysMessage = { text }
+        } else if (messageType === 'image') {
+            const imageUrl = req.body.imageUrl ?? req.query.imageUrl
+            const caption = req.body.caption ?? req.query.caption
+            if (!imageUrl) return res.status(400).json({ success: false, message: 'imageUrl parameter is required' })
+            baileysMessage = { image: { url: imageUrl }, caption }
+        } else if (messageType === 'video') {
+            const videoUrl = req.body.videoUrl ?? req.query.videoUrl
+            const caption = req.body.caption ?? req.query.caption
+            if (!videoUrl) return res.status(400).json({ success: false, message: 'videoUrl parameter is required' })
+            baileysMessage = { video: { url: videoUrl }, caption }
+        } else if (messageType === 'audio') {
+            const aacUrl = req.body.aacUrl ?? req.query.aacUrl
+            if (!aacUrl) return res.status(400).json({ success: false, message: 'aacUrl parameter is required' })
+            baileysMessage = { audio: { url: aacUrl }, mimetype: 'audio/mp4' }
+        } else if (messageType === 'document') {
+            const docUrl = req.body.docUrl ?? req.query.docUrl
+            const caption = req.body.caption ?? req.query.caption
+            if (!docUrl) return res.status(400).json({ success: false, message: 'docUrl parameter is required' })
+            const filename = docUrl.split('/').pop() || 'document.pdf'
+            baileysMessage = { document: { url: docUrl }, fileName: filename, caption }
+        } else if (messageType === 'location') {
+            const lat = Number(req.body.lat ?? req.query.lat)
+            const long = Number(req.body.long ?? req.query.long)
+            const title = req.body.title ?? req.query.title
+            if (isNaN(lat) || isNaN(long)) {
+                return res.status(400).json({ success: false, message: 'lat and long parameters are required and must be numbers' })
+            }
+            baileysMessage = { location: { degreesLatitude: lat, degreesLongitude: long, name: title } }
+        } else {
+            return res.status(400).json({ success: false, message: `Unsupported messageType: ${messageType}` })
+        }
+
+        const response = await client.sendMessage(jid, baileysMessage)
+        const messageId = response?.key?.id || 'unknown'
+        const timestamp = new Date().toISOString()
+
+        return res.status(200).json({
+            success: true,
+            message: 'Sent',
+            data: {
+                messageId,
+                timestamp,
+                recipient: cleanTo,
+                messageType,
+                contentPreview: messageType === 'text' ? (baileysMessage.text as string).substring(0, 50) : `${messageType} message`
+            }
+        })
+    } catch (error: any) {
+        logger.error('[WhatsApp REST API] Failed to send message:', error)
+        return res.status(500).json({ success: false, message: 'Message not sent', solution: error.message })
+    }
+}
+
 export default {
     getDevices,
     addDevice,
@@ -863,5 +1030,7 @@ export default {
     pauseCampaign,
     deleteCampaign,
     getDeviceGroups,
-    getGroupParticipants
+    getGroupParticipants,
+    filterWhatsAppNumbers,
+    restSendMessage
 }
