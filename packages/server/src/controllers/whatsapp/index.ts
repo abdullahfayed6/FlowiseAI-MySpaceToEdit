@@ -464,11 +464,22 @@ const sendMessage = async (req: Request, res: Response, next: NextFunction) => {
             store.pauseChat(chatId, true)
         }
 
+        let mediaType: string | undefined = undefined
+        if (file && file.data) {
+            const mimeType = file.mimeType || 'application/octet-stream'
+            if (mimeType.startsWith('image/')) mediaType = 'image'
+            else if (mimeType.startsWith('video/')) mediaType = 'video'
+            else if (mimeType.startsWith('audio/')) mediaType = 'audio'
+            else mediaType = 'document'
+        }
+
         return res.status(200).json({
             id: sent.key.id,
             body: responseBody,
             fromMe: true,
-            timestamp: sent.messageTimestamp
+            timestamp: sent.messageTimestamp,
+            mediaType,
+            caption: text || undefined
         })
     } catch (error) {
         next(error)

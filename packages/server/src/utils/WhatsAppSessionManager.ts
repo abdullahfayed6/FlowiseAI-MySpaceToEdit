@@ -405,12 +405,34 @@ export class SimpleStore {
                 const ts = coerceTimestamp(msg.messageTimestamp)
                 // Filter: only show messages after the bot was connected
                 if (ts < this.connectedAt) continue
+                const rawMsg = msg.message || {}
+                let mediaType: string | undefined = undefined
+                let caption: string | undefined = undefined
+
+                if (rawMsg.imageMessage) {
+                    mediaType = 'image'
+                    caption = rawMsg.imageMessage.caption || undefined
+                } else if (rawMsg.videoMessage) {
+                    mediaType = 'video'
+                    caption = rawMsg.videoMessage.caption || undefined
+                } else if (rawMsg.audioMessage) {
+                    mediaType = 'audio'
+                } else if (rawMsg.documentMessage) {
+                    mediaType = 'document'
+                    caption = rawMsg.documentMessage.caption || undefined
+                } else if (rawMsg.documentWithCaptionMessage?.message?.documentMessage) {
+                    mediaType = 'document'
+                    caption = rawMsg.documentWithCaptionMessage.message.documentMessage.caption || undefined
+                }
+
                 out.push({
                     id,
                     body: extractBody(msg),
                     fromMe: msg.key?.fromMe || false,
                     timestamp: ts,
-                    _seq: msg._seq || 0
+                    _seq: msg._seq || 0,
+                    mediaType,
+                    caption
                 })
             }
         }

@@ -37,6 +37,7 @@ import ViewHeader from '@/layout/MainLayout/ViewHeader'
 import whatsappApi from '@/api/whatsapp'
 import useNotifier from '@/utils/useNotifier'
 
+// eslint-disable-next-line react/prop-types
 const AudioPlayer = ({ deviceId, chatId, messageId }) => {
     const [audioUrl, setAudioUrl] = useState('')
     const [loading, setLoading] = useState(true)
@@ -78,7 +79,119 @@ const AudioPlayer = ({ deviceId, chatId, messageId }) => {
 
     return (
         <Box sx={{ mt: 0.5, minWidth: 240 }}>
+            {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
             <audio controls src={audioUrl} style={{ width: '100%', height: '40px' }} />
+        </Box>
+    )
+}
+
+// eslint-disable-next-line react/prop-types
+const ImagePlayer = ({ deviceId, chatId, messageId, caption }) => {
+    const [imageUrl, setImageUrl] = useState('')
+    const [loading, setLoading] = useState(true)
+    const [error, setError] = useState(false)
+
+    useEffect(() => {
+        let url = ''
+        const fetchImage = async () => {
+            try {
+                const response = await whatsappApi.getMessageMedia(deviceId, chatId, messageId)
+                url = URL.createObjectURL(response.data)
+                setImageUrl(url)
+            } catch (err) {
+                console.error('Failed to load image:', err)
+                setError(true)
+            } finally {
+                setLoading(false)
+            }
+        }
+        fetchImage()
+
+        return () => {
+            if (url) URL.revokeObjectURL(url)
+        }
+    }, [deviceId, chatId, messageId])
+
+    if (loading)
+        return (
+            <Typography variant='caption' sx={{ display: 'block', minWidth: 200, color: 'text.secondary' }}>
+                Loading image...
+            </Typography>
+        )
+    if (error)
+        return (
+            <Typography variant='caption' sx={{ display: 'block', minWidth: 200, color: 'error.main' }}>
+                Failed to load image
+            </Typography>
+        )
+
+    return (
+        <Box sx={{ mt: 0.5, maxWidth: '100%' }}>
+            {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions */}
+            <img
+                src={imageUrl}
+                alt='WhatsApp Media'
+                style={{ maxWidth: '100%', maxHeight: '300px', borderRadius: '4px', cursor: 'pointer', display: 'block' }}
+                onClick={() => window.open(imageUrl, '_blank')}
+            />
+            {caption && (
+                <Typography variant='body2' sx={{ mt: 1, wordBreak: 'break-word' }}>
+                    {caption}
+                </Typography>
+            )}
+        </Box>
+    )
+}
+
+// eslint-disable-next-line react/prop-types
+const VideoPlayer = ({ deviceId, chatId, messageId, caption }) => {
+    const [videoUrl, setVideoUrl] = useState('')
+    const [loading, setLoading] = useState(true)
+    const [error, setError] = useState(false)
+
+    useEffect(() => {
+        let url = ''
+        const fetchVideo = async () => {
+            try {
+                const response = await whatsappApi.getMessageMedia(deviceId, chatId, messageId)
+                url = URL.createObjectURL(response.data)
+                setVideoUrl(url)
+            } catch (err) {
+                console.error('Failed to load video:', err)
+                setError(true)
+            } finally {
+                setLoading(false)
+            }
+        }
+        fetchVideo()
+
+        return () => {
+            if (url) URL.revokeObjectURL(url)
+        }
+    }, [deviceId, chatId, messageId])
+
+    if (loading)
+        return (
+            <Typography variant='caption' sx={{ display: 'block', minWidth: 200, color: 'text.secondary' }}>
+                Loading video...
+            </Typography>
+        )
+    if (error)
+        return (
+            <Typography variant='caption' sx={{ display: 'block', minWidth: 200, color: 'error.main' }}>
+                Failed to load video
+            </Typography>
+        )
+
+    return (
+        <Box sx={{ mt: 0.5, maxWidth: '100%' }}>
+            {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+            <video src={videoUrl} controls style={{ maxWidth: '100%', maxHeight: '300px', borderRadius: '4px', display: 'block' }} />
+            {caption && (
+                <Typography variant='body2' sx={{ mt: 1, wordBreak: 'break-word' }}>
+                    {caption}
+                </Typography>
+            )}
         </Box>
     )
 }
@@ -518,7 +631,31 @@ const WhatsAppInbox = () => {
                                                         borderRadius: 2
                                                     }}
                                                 >
-                                                    {msg.body === '🎵 Audio message' || msg.body?.startsWith('🎵 Audio message') ? (
+                                                    {msg.mediaType === 'image' || msg.body === '📷 Photo' || msg.body?.startsWith('📷 ') ? (
+                                                        <ImagePlayer
+                                                            deviceId={selectedDeviceId}
+                                                            chatId={selectedChat.id}
+                                                            messageId={msg.id}
+                                                            caption={
+                                                                msg.caption ||
+                                                                (msg.body !== '📷 Photo' ? msg.body?.replace(/^📷\s?/, '') : '')
+                                                            }
+                                                        />
+                                                    ) : msg.mediaType === 'video' ||
+                                                      msg.body === '🎥 Video' ||
+                                                      msg.body?.startsWith('🎥 ') ? (
+                                                        <VideoPlayer
+                                                            deviceId={selectedDeviceId}
+                                                            chatId={selectedChat.id}
+                                                            messageId={msg.id}
+                                                            caption={
+                                                                msg.caption ||
+                                                                (msg.body !== '🎥 Video' ? msg.body?.replace(/^🎥\s?/, '') : '')
+                                                            }
+                                                        />
+                                                    ) : msg.mediaType === 'audio' ||
+                                                      msg.body === '🎵 Audio message' ||
+                                                      msg.body?.startsWith('🎵 Audio message') ? (
                                                         <AudioPlayer
                                                             deviceId={selectedDeviceId}
                                                             chatId={selectedChat.id}
@@ -602,6 +739,7 @@ const WhatsAppInbox = () => {
                                                     type='file'
                                                     onChange={handleFileChange}
                                                 />
+                                                {/* eslint-disable-next-line jsx-a11y/label-has-associated-control */}
                                                 <label htmlFor='whatsapp-inbox-file-input'>
                                                     <IconButton color='secondary' component='span' title='Attach file'>
                                                         <IconPaperclip />
