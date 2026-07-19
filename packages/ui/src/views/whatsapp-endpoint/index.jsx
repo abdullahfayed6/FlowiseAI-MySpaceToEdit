@@ -145,14 +145,25 @@ const WhatsAppEndpoint = () => {
                 keyName: newTokenLabel,
                 permissions: ['apikeys:view']
             })
-            if (res.data) {
-                setNewlyCreatedKey(res.data.apiKey)
+            if (res.data && Array.isArray(res.data)) {
+                // Find the new key by comparing the new list with the old list of keys
+                const newKeyObj = res.data.find((k) => !apiKeys.some((old) => old.id === k.id))
+                if (newKeyObj) {
+                    setNewlyCreatedKey(newKeyObj.apiKey)
+                    setSelectedApiKey(newKeyObj.apiKey)
+                    setSelectedKeyId(newKeyObj.id)
+                } else {
+                    // Fallback to the last element of the list if comparison fails
+                    const lastKey = res.data[res.data.length - 1]
+                    if (lastKey) {
+                        setNewlyCreatedKey(lastKey.apiKey)
+                        setSelectedApiKey(lastKey.apiKey)
+                        setSelectedKeyId(lastKey.id)
+                    }
+                }
                 setNewTokenDialogOpen(false)
                 setNewTokenLabel('')
                 setShowCopyDialog(true)
-                // Select the new key
-                setSelectedApiKey(res.data.apiKey)
-                setSelectedKeyId(res.data.id)
                 fetchKeys()
             }
         } catch (e) {
