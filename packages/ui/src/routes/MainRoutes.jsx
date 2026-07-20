@@ -65,6 +65,7 @@ const WhatsAppInbox = Loadable(lazy(() => import('@/views/whatsapp-inbox')))
 const WhatsAppCampaigns = Loadable(lazy(() => import('@/views/whatsapp-campaigns')))
 const WhatsAppCampaignDetails = Loadable(lazy(() => import('@/views/whatsapp-campaigns/CampaignDetails')))
 const WhatsAppEndpoint = Loadable(lazy(() => import('@/views/whatsapp-endpoint')))
+const WhatsAppValidator = Loadable(lazy(() => import('@/views/whatsapp-validator')))
 
 // executions routing
 const Executions = Loadable(lazy(() => import('@/views/agentexecutions')))
@@ -397,6 +398,14 @@ const MainRoutes = {
             element: (
                 <RequireAuth permission={'whatsapp-devices:view'}>
                     <WhatsAppEndpoint />
+                </RequireAuth>
+            )
+        },
+        {
+            path: '/whatsapp-validator',
+            element: (
+                <RequireAuth permission={'whatsapp-devices:view'}>
+                    <WhatsAppValidator />
                 </RequireAuth>
             )
         }

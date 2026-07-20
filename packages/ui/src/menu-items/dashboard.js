@@ -210,6 +210,15 @@ const dashboard = {
                     permission: 'whatsapp-campaigns:view'
                 },
                 {
+                    id: 'whatsapp-validator',
+                    title: 'WA Validator',
+                    type: 'item',
+                    url: '/whatsapp-validator',
+                    icon: icons.IconListCheck,
+                    breadcrumbs: true,
+                    permission: 'whatsapp-devices:view'
+                },
+                {
                     id: 'whatsapp-endpoint',
                     title: 'API Endpoint',
                     type: 'item',
